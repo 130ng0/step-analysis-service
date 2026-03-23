@@ -1,0 +1,7 @@
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+python-multipart==0.0.9
+numpy==1.26.4
+cadquery==2.4.0
+trimesh==4.4.9
+pydantic~=2.12.5
