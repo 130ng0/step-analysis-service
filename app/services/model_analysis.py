@@ -15,8 +15,6 @@ from OCP.TopExp import TopExp_Explorer
 from OCP.TopLoc import TopLoc_Location
 from OCP.TopoDS import TopoDS
 
-from app.config import ALLOWED_EXTENSIONS
-
 
 class ModelAnalysisError(Exception):
     pass
@@ -43,6 +41,52 @@ DEFAULT_SUPPORT_BREAKAWAY_DENSITY_G_CM3 = 1.04
 DEFAULT_SUPPORT_HIPS_DENSITY_G_CM3 = 1.03
 DEFAULT_SUPPORT_SOLUBLE_DENSITY_G_CM3 = 1.20
 
+STL_SUPPORT_MAX_FACES = 50000
+STEP_SUPPORT_LINEAR_DEFLECTION = 0.25
+STEP_SUPPORT_ANGULAR_DEFLECTION = 0.7
+
+
+def _simplify_mesh_for_support(mesh: trimesh.Trimesh, max_faces: int = STL_SUPPORT_MAX_FACES) -> trimesh.Trimesh:
+    """
+    Vereinfacht ein Mesh für die Support-Berechnung.
+    Originale Volumen-/Flächenberechnung bleibt davon unberührt.
+    """
+    simplified = mesh.copy()
+
+    try:
+        simplified.remove_unreferenced_vertices()
+    except Exception:
+        pass
+
+    try:
+        simplified.remove_duplicate_faces()
+    except Exception:
+        pass
+
+    try:
+        simplified.remove_degenerate_faces()
+    except Exception:
+        pass
+
+    try:
+        simplified.merge_vertices()
+    except Exception:
+        pass
+
+    if len(simplified.faces) > max_faces:
+        try:
+            simplified = simplified.simplify_quadric_decimation(max_faces)
+        except Exception:
+            # Falls Decimation nicht verfügbar oder fehlschlägt:
+            # wir nutzen einfach das bereinigte Mesh weiter
+            pass
+
+    if simplified.is_empty:
+        return mesh
+
+    return simplified
+
+
 def _is_missing(value) -> bool:
     if value is None:
         return True
@@ -51,13 +95,15 @@ def _is_missing(value) -> bool:
         return normalized in {"", "string", "null", "none"}
     return False
 
+
 def _to_optional_float(value, field_name: str):
     if _is_missing(value):
         return None
     try:
         return float(value)
     except (TypeError, ValueError) as exc:
-        raise ModelAnalysisError(f"{field_name} must be a valid number") from exc
+        raise ModelAnalysisError("{field_name} must be a valid number")
+
 
 def _detect_format(filename: str) -> str:
     lower = (filename or "").lower()
@@ -66,7 +112,7 @@ def _detect_format(filename: str) -> str:
     if lower.endswith(".stl"):
         return "stl"
     raise UnsupportedFileFormatError(
-        f"Allowed formats: {', '.join(ALLOWED_EXTENSIONS)}"
+        "Allowed formats: {', '.join(ALLOWED_EXTENSIONS)}"
     )
 
 
@@ -173,14 +219,18 @@ def analyze_model_file_bytes(file_bytes: bytes, filename: str, unit: str) -> Dic
         if fmt == "stl":
             return _analyze_stl(path, filename, unit)
         raise UnsupportedFileFormatError(
-            f"Allowed formats: {', '.join(ALLOWED_EXTENSIONS)}"
+            "Allowed formats: {', '.join(ALLOWED_EXTENSIONS)}"
         )
     finally:
         if os.path.exists(path):
             os.unlink(path)
 
 
-def _step_to_trimesh(path: str, linear_deflection: float = 0.15, angular_deflection: float = 0.5) -> trimesh.Trimesh:
+def _step_to_trimesh(
+    path: str,
+    linear_deflection: float = STEP_SUPPORT_LINEAR_DEFLECTION,
+    angular_deflection: float = STEP_SUPPORT_ANGULAR_DEFLECTION,
+) -> trimesh.Trimesh:
     obj = _load_step_shape(path)
     shape = obj.wrapped
 
@@ -251,11 +301,18 @@ def _load_mesh_for_support(file_bytes: bytes, filename: str) -> trimesh.Trimesh:
 
     try:
         if fmt == "stl":
-            return _load_stl_mesh(path)
+            mesh = _load_stl_mesh(path)
+            return _simplify_mesh_for_support(mesh, max_faces=STL_SUPPORT_MAX_FACES)
+
         if fmt == "step":
-            return _step_to_trimesh(path)
+            return _step_to_trimesh(
+                path,
+                linear_deflection=STEP_SUPPORT_LINEAR_DEFLECTION,
+                angular_deflection=STEP_SUPPORT_ANGULAR_DEFLECTION,
+            )
+
         raise UnsupportedFileFormatError(
-            f"Allowed formats: {', '.join(ALLOWED_EXTENSIONS)}"
+            "Allowed formats: {', '.join(ALLOWED_EXTENSIONS)}"
         )
     finally:
         if os.path.exists(path):
@@ -429,7 +486,7 @@ def _resolve_support_material(
     )
 
     if support_material_type == "breakaway":
-        name = f"{part_material_name} Breakaway"
+        name = "{part_material_name} Breakaway"
         price = (
             part_material_price_per_kg_eur
             if support_material_price_per_kg_eur is None
