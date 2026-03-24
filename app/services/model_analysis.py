@@ -41,16 +41,52 @@ DEFAULT_SUPPORT_BREAKAWAY_DENSITY_G_CM3 = 1.04
 DEFAULT_SUPPORT_HIPS_DENSITY_G_CM3 = 1.03
 DEFAULT_SUPPORT_SOLUBLE_DENSITY_G_CM3 = 1.20
 
-STL_SUPPORT_MAX_FACES = 50000
-STEP_SUPPORT_LINEAR_DEFLECTION = 0.25
-STEP_SUPPORT_ANGULAR_DEFLECTION = 0.7
+MAX_FILE_SIZE_MB = 100
+MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024
+
+STL_SUPPORT_MAX_FACES = 25000
+STL_FULL_SUPPORT_MAX_FILE_MB = 12
+
+STEP_SUPPORT_LINEAR_DEFLECTION = 0.6
+STEP_SUPPORT_ANGULAR_DEFLECTION = 1
+STEP_FULL_SUPPORT_MAX_FILE_MB = 8
+
+
+def _is_large_file(file_bytes: bytes, threshold_mb: int) -> bool:
+    return len(file_bytes) > threshold_mb * 1024 * 1024
+
+
+def _fallback_support_estimate_from_part(
+    result: Dict,
+    support_density_factor: float,
+    support_angle_deg: float,
+) -> Dict:
+    volume_mm3 = float(result.get("volume_mm3") or 0.0)
+    surface_mm2 = float(result.get("surface_mm2") or 0.0)
+    bbox_z_mm = float(result.get("bbox_z_mm") or 0.0)
+
+    # sehr grobe Näherung:
+    # mehr Oberfläche + mehr Höhe => tendenziell mehr Support-Risiko
+    critical_overhang_area_mm2 = surface_mm2 * 0.12
+    average_support_height_mm = bbox_z_mm * 0.45
+    support_volume_mm3 = critical_overhang_area_mm2 * average_support_height_mm * support_density_factor
+
+    warnings = list(result.get("warnings", []))
+    warnings.append("Large file fallback support estimate was used to reduce memory usage")
+
+    return {
+        "support_angle_deg": round(support_angle_deg, 3),
+        "support_density_factor": round(support_density_factor, 3),
+        "support_required": support_volume_mm3 > 0,
+        "critical_overhang_area_mm2": round(critical_overhang_area_mm2, 3),
+        "average_support_height_mm": round(average_support_height_mm, 3),
+        "support_volume_mm3": round(support_volume_mm3, 3),
+        "support_volume_cm3": round(support_volume_mm3 / 1000.0, 3),
+        "warnings": warnings,
+    }
 
 
 def _simplify_mesh_for_support(mesh: trimesh.Trimesh, max_faces: int = STL_SUPPORT_MAX_FACES) -> trimesh.Trimesh:
-    """
-    Vereinfacht ein Mesh für die Support-Berechnung.
-    Originale Volumen-/Flächenberechnung bleibt davon unberührt.
-    """
     simplified = mesh.copy()
 
     try:
@@ -73,12 +109,19 @@ def _simplify_mesh_for_support(mesh: trimesh.Trimesh, max_faces: int = STL_SUPPO
     except Exception:
         pass
 
+    # kleine Splitter entsorgen
+    try:
+        components = simplified.split(only_watertight=False)
+        if components:
+            components = sorted(components, key=lambda m: len(m.faces), reverse=True)
+            simplified = trimesh.util.concatenate(components[:3])
+    except Exception:
+        pass
+
     if len(simplified.faces) > max_faces:
         try:
             simplified = simplified.simplify_quadric_decimation(max_faces)
         except Exception:
-            # Falls Decimation nicht verfügbar oder fehlschlägt:
-            # wir nutzen einfach das bereinigte Mesh weiter
             pass
 
     if simplified.is_empty:
@@ -406,6 +449,29 @@ def add_support_estimate(
 
     if support_density_factor < 0 or support_density_factor > 1:
         raise ModelAnalysisError("support_density_factor must be between 0 and 1")
+
+    fmt = _detect_format(filename)
+
+    # große Dateien -> heuristischer Fallback
+    if fmt == "stl" and _is_large_file(file_bytes, STL_FULL_SUPPORT_MAX_FILE_MB):
+        out.update(
+            _fallback_support_estimate_from_part(
+                result=out,
+                support_density_factor=support_density_factor,
+                support_angle_deg=support_angle_deg,
+            )
+        )
+        return out
+
+    if fmt == "step" and _is_large_file(file_bytes, STEP_FULL_SUPPORT_MAX_FILE_MB):
+        out.update(
+            _fallback_support_estimate_from_part(
+                result=out,
+                support_density_factor=support_density_factor,
+                support_angle_deg=support_angle_deg,
+            )
+        )
+        return out
 
     mesh = _load_mesh_for_support(file_bytes=file_bytes, filename=filename)
     support = _support_analysis_from_mesh(

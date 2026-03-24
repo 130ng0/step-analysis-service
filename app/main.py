@@ -88,7 +88,20 @@ async def analyze_model(
     support_material_density_g_cm3: str | None = Form(default=None),
     margin_factor: float | None = Form(default=1.0),
 ):
+    file_bytes = await file.read()
     filename = file.filename or "model.step"
+    MAX_FILE_SIZE_BYTES = 100 * 1024 * 1024
+
+    if len(file_bytes) > MAX_FILE_SIZE_BYTES:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "success": False,
+                "error": "FILE_TOO_LARGE",
+                "details": "Maximum allowed size is 100 MB",
+                "filename": filename,
+            },
+        )
 
     if unit not in {"mm", "cm", "m"}:
         raise HTTPException(status_code=400, detail="unit must be one of: mm, cm, m")
