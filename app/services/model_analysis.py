@@ -710,14 +710,24 @@ def add_extrusion_estimate(
 
     bbox_shell_volume = max(bbox_volume - (inner_x * inner_y * inner_z), 0.0)
 
-    # Begrenzte Shell-Näherung:
-    # reduziert Überreaktion auf größere line width / layer height
-    shell_volume = min(part_volume, bbox_shell_volume * (packing_ratio ** 0.85))
-
+    # geometrische Schätzung
+    shell_volume_geom = min(part_volume, bbox_shell_volume * (packing_ratio ** 0.82))
+    inner_part_volume = max(part_volume - shell_volume_geom, 0.0)
     infill_fraction = infill_percent / 100.0
-    inner_part_volume = max(part_volume - shell_volume, 0.0)
+    geometry_based_estimate = shell_volume_geom + inner_part_volume * infill_fraction
 
-    effective_part_extrusion_volume = shell_volume + inner_part_volume * infill_fraction
+    # Mindestquote für technische Gehäuse / strukturreiche Teile
+    minimum_fraction = (
+        0.12
+        + 0.028 * perimeter_count
+        + 0.006 * (top_layers + bottom_layers)
+        + 0.38 * infill_fraction
+    )
+    minimum_fraction = min(max(minimum_fraction, 0.20), 0.48)
+
+    minimum_estimate = part_volume * minimum_fraction
+
+    effective_part_extrusion_volume = max(geometry_based_estimate, minimum_estimate)
     effective_support_extrusion_volume = 0.0 if support_material_type == "none" else support_volume
 
     out["infill_percent"] = round(infill_percent, 3)
