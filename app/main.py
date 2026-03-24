@@ -1,8 +1,7 @@
-from __future__ import annotations
-
 import logging
 import time
 import uuid
+from typing import Literal
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse
@@ -19,14 +18,13 @@ from app.services.model_analysis import (
     add_support_estimate,
     analyze_model_file_bytes,
 )
-from typing import Literal
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("step-analysis-service")
 
 app = FastAPI(
     title="3D Model Analysis Service",
-    version="1.6.0",
+    version="1.7.0",
     docs_url="/docs",
     redoc_url="/redoc",
 )
@@ -88,20 +86,7 @@ async def analyze_model(
     support_material_density_g_cm3: str | None = Form(default=None),
     margin_factor: float | None = Form(default=1.0),
 ):
-    file_bytes = await file.read()
     filename = file.filename or "model.step"
-    MAX_FILE_SIZE_BYTES = 100 * 1024 * 1024
-
-    if len(file_bytes) > MAX_FILE_SIZE_BYTES:
-        return JSONResponse(
-            status_code=400,
-            content={
-                "success": False,
-                "error": "FILE_TOO_LARGE",
-                "details": "Maximum allowed size is 100 MB",
-                "filename": filename,
-            },
-        )
 
     if unit not in {"mm", "cm", "m"}:
         raise HTTPException(status_code=400, detail="unit must be one of: mm, cm, m")
@@ -117,23 +102,23 @@ async def analyze_model(
             },
         )
 
+    file_bytes = await file.read()
+
+    if not file_bytes:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty")
+
+    if len(file_bytes) > MAX_FILE_SIZE_BYTES:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "success": False,
+                "error": "FILE_TOO_LARGE",
+                "details": f"Maximum allowed size is {MAX_FILE_SIZE_BYTES // (1024 * 1024)} MB",
+                "filename": filename,
+            },
+        )
+
     try:
-        file_bytes = await file.read()
-
-        if not file_bytes:
-            raise HTTPException(status_code=400, detail="Uploaded file is empty")
-
-        if len(file_bytes) > MAX_FILE_SIZE_BYTES:
-            return JSONResponse(
-                status_code=400,
-                content={
-                    "success": False,
-                    "error": "FILE_TOO_LARGE",
-                    "details": f"Maximum allowed size is {MAX_FILE_SIZE_BYTES // (1024 * 1024)} MB",
-                    "filename": filename,
-                },
-            )
-
         result = analyze_model_file_bytes(
             file_bytes=file_bytes,
             filename=filename,

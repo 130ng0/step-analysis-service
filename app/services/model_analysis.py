@@ -15,6 +15,8 @@ from OCP.TopExp import TopExp_Explorer
 from OCP.TopLoc import TopLoc_Location
 from OCP.TopoDS import TopoDS
 
+from app.config import ALLOWED_EXTENSIONS
+
 
 class ModelAnalysisError(Exception):
     pass
@@ -29,105 +31,21 @@ DEFAULT_PART_MATERIAL_PRICE_PER_KG_EUR = 28.0
 DEFAULT_PART_MATERIAL_DENSITY_G_CM3 = 1.04
 
 DEFAULT_SUPPORT_MATERIAL_TYPE = "breakaway"
-DEFAULT_SUPPORT_BREAKAWAY_NAME = "ABS Breakaway"
 DEFAULT_SUPPORT_HIPS_NAME = "HIPS"
 DEFAULT_SUPPORT_SOLUBLE_NAME = "Soluble Support"
 
-DEFAULT_SUPPORT_BREAKAWAY_PRICE_PER_KG_EUR = 28.0
-DEFAULT_SUPPORT_HIPS_PRICE_PER_KG_EUR = 27.0 / 0.75  # 36 €/kg
+DEFAULT_SUPPORT_HIPS_PRICE_PER_KG_EUR = 27.0 / 0.75
 DEFAULT_SUPPORT_SOLUBLE_PRICE_PER_KG_EUR = 80.0
 
-DEFAULT_SUPPORT_BREAKAWAY_DENSITY_G_CM3 = 1.04
 DEFAULT_SUPPORT_HIPS_DENSITY_G_CM3 = 1.03
 DEFAULT_SUPPORT_SOLUBLE_DENSITY_G_CM3 = 1.20
-
-MAX_FILE_SIZE_MB = 100
-MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024
 
 STL_SUPPORT_MAX_FACES = 25000
 STL_FULL_SUPPORT_MAX_FILE_MB = 12
 
 STEP_SUPPORT_LINEAR_DEFLECTION = 0.6
-STEP_SUPPORT_ANGULAR_DEFLECTION = 1
+STEP_SUPPORT_ANGULAR_DEFLECTION = 1.0
 STEP_FULL_SUPPORT_MAX_FILE_MB = 8
-
-
-def _is_large_file(file_bytes: bytes, threshold_mb: int) -> bool:
-    return len(file_bytes) > threshold_mb * 1024 * 1024
-
-
-def _fallback_support_estimate_from_part(
-    result: Dict,
-    support_density_factor: float,
-    support_angle_deg: float,
-) -> Dict:
-    volume_mm3 = float(result.get("volume_mm3") or 0.0)
-    surface_mm2 = float(result.get("surface_mm2") or 0.0)
-    bbox_z_mm = float(result.get("bbox_z_mm") or 0.0)
-
-    # sehr grobe Näherung:
-    # mehr Oberfläche + mehr Höhe => tendenziell mehr Support-Risiko
-    critical_overhang_area_mm2 = surface_mm2 * 0.12
-    average_support_height_mm = bbox_z_mm * 0.45
-    support_volume_mm3 = critical_overhang_area_mm2 * average_support_height_mm * support_density_factor
-
-    warnings = list(result.get("warnings", []))
-    warnings.append("Large file fallback support estimate was used to reduce memory usage")
-
-    return {
-        "support_angle_deg": round(support_angle_deg, 3),
-        "support_density_factor": round(support_density_factor, 3),
-        "support_required": support_volume_mm3 > 0,
-        "critical_overhang_area_mm2": round(critical_overhang_area_mm2, 3),
-        "average_support_height_mm": round(average_support_height_mm, 3),
-        "support_volume_mm3": round(support_volume_mm3, 3),
-        "support_volume_cm3": round(support_volume_mm3 / 1000.0, 3),
-        "warnings": warnings,
-    }
-
-
-def _simplify_mesh_for_support(mesh: trimesh.Trimesh, max_faces: int = STL_SUPPORT_MAX_FACES) -> trimesh.Trimesh:
-    simplified = mesh.copy()
-
-    try:
-        simplified.remove_unreferenced_vertices()
-    except Exception:
-        pass
-
-    try:
-        simplified.remove_duplicate_faces()
-    except Exception:
-        pass
-
-    try:
-        simplified.remove_degenerate_faces()
-    except Exception:
-        pass
-
-    try:
-        simplified.merge_vertices()
-    except Exception:
-        pass
-
-    # kleine Splitter entsorgen
-    try:
-        components = simplified.split(only_watertight=False)
-        if components:
-            components = sorted(components, key=lambda m: len(m.faces), reverse=True)
-            simplified = trimesh.util.concatenate(components[:3])
-    except Exception:
-        pass
-
-    if len(simplified.faces) > max_faces:
-        try:
-            simplified = simplified.simplify_quadric_decimation(max_faces)
-        except Exception:
-            pass
-
-    if simplified.is_empty:
-        return mesh
-
-    return simplified
 
 
 def _is_missing(value) -> bool:
@@ -145,7 +63,11 @@ def _to_optional_float(value, field_name: str):
     try:
         return float(value)
     except (TypeError, ValueError) as exc:
-        raise ModelAnalysisError("{field_name} must be a valid number")
+        raise ModelAnalysisError(f"{field_name} must be a valid number") from exc
+
+
+def _is_large_file(file_bytes: bytes, threshold_mb: int) -> bool:
+    return len(file_bytes) > threshold_mb * 1024 * 1024
 
 
 def _detect_format(filename: str) -> str:
@@ -155,7 +77,7 @@ def _detect_format(filename: str) -> str:
     if lower.endswith(".stl"):
         return "stl"
     raise UnsupportedFileFormatError(
-        "Allowed formats: {', '.join(ALLOWED_EXTENSIONS)}"
+        f"Allowed formats: {', '.join(ALLOWED_EXTENSIONS)}"
     )
 
 
@@ -262,11 +184,54 @@ def analyze_model_file_bytes(file_bytes: bytes, filename: str, unit: str) -> Dic
         if fmt == "stl":
             return _analyze_stl(path, filename, unit)
         raise UnsupportedFileFormatError(
-            "Allowed formats: {', '.join(ALLOWED_EXTENSIONS)}"
+            f"Allowed formats: {', '.join(ALLOWED_EXTENSIONS)}"
         )
     finally:
         if os.path.exists(path):
             os.unlink(path)
+
+
+def _simplify_mesh_for_support(mesh: trimesh.Trimesh, max_faces: int = STL_SUPPORT_MAX_FACES) -> trimesh.Trimesh:
+    simplified = mesh.copy()
+
+    try:
+        simplified.remove_unreferenced_vertices()
+    except Exception:
+        pass
+
+    try:
+        simplified.remove_duplicate_faces()
+    except Exception:
+        pass
+
+    try:
+        simplified.remove_degenerate_faces()
+    except Exception:
+        pass
+
+    try:
+        simplified.merge_vertices()
+    except Exception:
+        pass
+
+    try:
+        components = simplified.split(only_watertight=False)
+        if components:
+            components = sorted(components, key=lambda m: len(m.faces), reverse=True)
+            simplified = trimesh.util.concatenate(components[:3])
+    except Exception:
+        pass
+
+    if len(simplified.faces) > max_faces:
+        try:
+            simplified = simplified.simplify_quadric_decimation(max_faces)
+        except Exception:
+            pass
+
+    if simplified.is_empty:
+        return mesh
+
+    return simplified
 
 
 def _step_to_trimesh(
@@ -355,7 +320,7 @@ def _load_mesh_for_support(file_bytes: bytes, filename: str) -> trimesh.Trimesh:
             )
 
         raise UnsupportedFileFormatError(
-            "Allowed formats: {', '.join(ALLOWED_EXTENSIONS)}"
+            f"Allowed formats: {', '.join(ALLOWED_EXTENSIONS)}"
         )
     finally:
         if os.path.exists(path):
@@ -424,6 +389,34 @@ def _support_analysis_from_mesh(
     }
 
 
+def _fallback_support_estimate_from_part(
+    result: Dict,
+    support_density_factor: float,
+    support_angle_deg: float,
+) -> Dict:
+    volume_mm3 = float(result.get("volume_mm3") or 0.0)
+    surface_mm2 = float(result.get("surface_mm2") or 0.0)
+    bbox_z_mm = float(result.get("bbox_z_mm") or 0.0)
+
+    critical_overhang_area_mm2 = surface_mm2 * 0.12
+    average_support_height_mm = bbox_z_mm * 0.45
+    support_volume_mm3 = critical_overhang_area_mm2 * average_support_height_mm * support_density_factor
+
+    warnings = list(result.get("warnings", []))
+    warnings.append("Large file fallback support estimate was used to reduce memory usage")
+
+    return {
+        "support_angle_deg": round(support_angle_deg, 3),
+        "support_density_factor": round(support_density_factor, 3),
+        "support_required": support_volume_mm3 > 0,
+        "critical_overhang_area_mm2": round(critical_overhang_area_mm2, 3),
+        "average_support_height_mm": round(average_support_height_mm, 3),
+        "support_volume_mm3": round(support_volume_mm3, 3),
+        "support_volume_cm3": round(support_volume_mm3 / 1000.0, 3),
+        "warnings": warnings,
+    }
+
+
 def add_support_estimate(
     result: Dict,
     file_bytes: bytes,
@@ -452,7 +445,6 @@ def add_support_estimate(
 
     fmt = _detect_format(filename)
 
-    # große Dateien -> heuristischer Fallback
     if fmt == "stl" and _is_large_file(file_bytes, STL_FULL_SUPPORT_MAX_FILE_MB):
         out.update(
             _fallback_support_estimate_from_part(
@@ -552,7 +544,7 @@ def _resolve_support_material(
     )
 
     if support_material_type == "breakaway":
-        name = "{part_material_name} Breakaway"
+        name = f"{part_material_name} Breakaway"
         price = (
             part_material_price_per_kg_eur
             if support_material_price_per_kg_eur is None
@@ -602,6 +594,7 @@ def _resolve_support_material(
         "support_material_price_per_kg_eur": float(price),
         "support_material_density_g_cm3": float(density),
     }
+
 
 def add_material_estimate(
     result: Dict,
