@@ -364,6 +364,7 @@ def _support_analysis_from_mesh(
 ) -> Dict:
     triangles = mesh.triangles
     normals = mesh.face_normals
+    centroids = mesh.triangles_center
 
     if len(triangles) == 0:
         raise ModelAnalysisError("Mesh contains no triangles")
@@ -371,48 +372,76 @@ def _support_analysis_from_mesh(
     z_up = np.array([0.0, 0.0, 1.0])
     cos_threshold = math.cos(math.radians(90.0 - support_angle_deg))
 
+    z_min = float(mesh.bounds[0][2])
+    support_volume = 0.0
     critical_projected_area = 0.0
     weighted_height_sum = 0.0
     critical_area_sum = 0.0
 
-    for tri, normal in zip(triangles, normals):
-        nz = float(np.dot(normal, z_up))
+    candidate_indices = []
+    candidate_effective_areas = []
+    candidate_origins = []
 
+    for idx, (tri, normal, centroid) in enumerate(zip(triangles, normals, centroids)):
+        nz = float(np.dot(normal, z_up))
         if nz >= 0:
             continue
-
         if abs(nz) < cos_threshold:
             continue
 
-        tri_xy_projected_area = _projected_triangle_area_xy(tri)
-
-        if tri_xy_projected_area <= 0:
+        proj_area = _projected_triangle_area_xy(tri)
+        if proj_area <= 0:
             continue
 
-        avg_z = float((tri[0][2] + tri[1][2] + tri[2][2]) / 3.0)
-
         angle_weight = min(1.0, abs(nz))
-        effective_area = float(tri_xy_projected_area) * angle_weight
+        effective_area = float(proj_area) * angle_weight
+
+        origin = centroid.copy()
+        origin[2] -= 0.05
+
+        candidate_indices.append(idx)
+        candidate_effective_areas.append(effective_area)
+        candidate_origins.append(origin)
+
+    hit_gaps = {}
+
+    if candidate_origins:
+        try:
+            origins = np.array(candidate_origins)
+            directions = np.tile(np.array([[0.0, 0.0, -1.0]]), (len(origins), 1))
+            locations, index_ray, _ = mesh.ray.intersects_location(origins, directions, multiple_hits=False)
+
+            for ray_idx, loc in zip(index_ray, locations):
+                gap = float(origins[ray_idx][2] - loc[2])
+                if gap > 0:
+                    hit_gaps[int(ray_idx)] = gap
+        except Exception:
+            hit_gaps = {}
+
+    for local_idx, effective_area, origin in zip(range(len(candidate_indices)), candidate_effective_areas, candidate_origins):
+        if local_idx in hit_gaps:
+            support_height = hit_gaps[local_idx]
+        else:
+            support_height = max(float(origin[2] - z_min), 0.0)
 
         critical_projected_area += effective_area
-        weighted_height_sum += effective_area * max(avg_z, 0.0)
+        weighted_height_sum += effective_area * support_height
         critical_area_sum += effective_area
+        support_volume += effective_area * support_height * support_density_factor
 
     if critical_area_sum > 0:
         average_support_height = weighted_height_sum / critical_area_sum
     else:
         average_support_height = 0.0
 
-    support_volume_mm3 = critical_projected_area * average_support_height * support_density_factor
-
     return {
         "support_angle_deg": round(support_angle_deg, 3),
         "support_density_factor": round(support_density_factor, 3),
-        "support_required": support_volume_mm3 > 0,
+        "support_required": support_volume > 0,
         "critical_overhang_area_mm2": round(float(critical_projected_area), 3),
         "average_support_height_mm": round(float(average_support_height), 3),
-        "support_volume_mm3": round(float(support_volume_mm3), 3),
-        "support_volume_cm3": round(float(support_volume_mm3) / 1000.0, 3),
+        "support_volume_mm3": round(float(support_volume), 3),
+        "support_volume_cm3": round(float(support_volume) / 1000.0, 3),
     }
 
 
@@ -493,6 +522,9 @@ def _evaluate_support_for_orientation(
     oriented = mesh.copy()
     oriented.apply_transform(transform)
 
+    bounds = oriented.bounds.copy()
+    oriented.apply_translation([0.0, 0.0, -float(bounds[0][2])])
+
     result = _support_analysis_from_mesh(
         oriented,
         support_angle_deg=support_angle_deg,
@@ -513,13 +545,16 @@ def _best_support_orientation_from_mesh(
     transforms = _orientation_transforms()
 
     if orientation_mode == "fixed":
-        return _evaluate_support_for_orientation(
+        best = _evaluate_support_for_orientation(
             mesh=mesh,
             support_angle_deg=support_angle_deg,
             support_density_factor=support_density_factor,
             orientation_name="z_plus",
             transform=transforms["z_plus"],
         )
+        best.pop("build_height_mm", None)
+        best.pop("bed_contact_area_mm2", None)
+        return best
 
     candidates = []
     for orientation_name, transform in transforms.items():
@@ -583,7 +618,6 @@ def add_support_estimate(
 
     fmt = _detect_format(filename)
 
-    # Orientierung auch bei "none" trotzdem optimieren
     if fmt == "stl" and _is_large_file(file_bytes, STL_FULL_SUPPORT_MAX_FILE_MB):
         selected_orientation = _fallback_orientation_from_bbox(out, orientation_mode)
         out.update(
@@ -594,9 +628,7 @@ def add_support_estimate(
                 selected_orientation=selected_orientation,
             )
         )
-        return out
-
-    if fmt == "step" and _is_large_file(file_bytes, STEP_FULL_SUPPORT_MAX_FILE_MB):
+    elif fmt == "step" and _is_large_file(file_bytes, STEP_FULL_SUPPORT_MAX_FILE_MB):
         selected_orientation = _fallback_orientation_from_bbox(out, orientation_mode)
         out.update(
             _fallback_support_estimate_from_part(
@@ -606,17 +638,39 @@ def add_support_estimate(
                 selected_orientation=selected_orientation,
             )
         )
-        return out
+    else:
+        mesh = _load_mesh_for_support(file_bytes=file_bytes, filename=filename)
+        support = _best_support_orientation_from_mesh(
+            mesh=mesh,
+            support_angle_deg=support_angle_deg,
+            support_density_factor=support_density_factor,
+            orientation_mode=orientation_mode,
+        )
+        out.update(support)
 
-    mesh = _load_mesh_for_support(file_bytes=file_bytes, filename=filename)
-    support = _best_support_orientation_from_mesh(
-        mesh=mesh,
-        support_angle_deg=support_angle_deg,
-        support_density_factor=support_density_factor,
-        orientation_mode=orientation_mode,
-    )
-    out.update(support)
+    if support_material_type == "none" or (support_density_factor is not None and support_density_factor <= 0):
+        out["support_required"] = False
+        out["support_volume_mm3"] = 0.0
+        out["support_volume_cm3"] = 0.0
+        out["average_support_height_mm"] = 0.0
+        out["support_density_factor"] = 0.0
+
     return out
+
+
+def _oriented_dimensions_from_result(result: Dict) -> Tuple[float, float, float]:
+    bx = float(result.get("bbox_x_mm") or 0.0)
+    by = float(result.get("bbox_y_mm") or 0.0)
+    bz = float(result.get("bbox_z_mm") or 0.0)
+    orientation = result.get("selected_orientation") or "z_plus"
+
+    if orientation in {"z_plus", "z_minus"}:
+        return bx, by, bz
+    if orientation in {"x_plus", "x_minus"}:
+        return by, bz, bx
+    if orientation in {"y_plus", "y_minus"}:
+        return bx, bz, by
+    return bx, by, bz
 
 
 def add_extrusion_estimate(
@@ -641,21 +695,29 @@ def add_extrusion_estimate(
         raise ModelAnalysisError("line_width_mm and layer_height_mm must be > 0")
 
     part_volume = float(out.get("volume_mm3") or 0.0)
-    surface_area = float(out.get("surface_mm2") or 0.0)
     support_volume = float(out.get("support_volume_mm3") or 0.0)
 
-    infill_fraction = infill_percent / 100.0
+    dim_x, dim_y, dim_z = _oriented_dimensions_from_result(out)
+    bbox_volume = max(dim_x * dim_y * dim_z, 1.0)
+    packing_ratio = max(0.08, min(part_volume / bbox_volume, 1.0))
+
     wall_thickness = perimeter_count * line_width_mm
-    top_bottom_total_thickness = (top_layers + bottom_layers) * layer_height_mm
+    top_bottom_total = (top_layers + bottom_layers) * layer_height_mm
 
-    # Shell-Modell:
-    # Seitenwände dominieren, Top/Bottom geben zusätzlichen Zuschlag.
-    effective_shell_thickness = wall_thickness + (0.30 * top_bottom_total_thickness)
+    inner_x = max(dim_x - 2.0 * wall_thickness, 0.0)
+    inner_y = max(dim_y - 2.0 * wall_thickness, 0.0)
+    inner_z = max(dim_z - top_bottom_total, 0.0)
 
-    shell_volume = min(part_volume, surface_area * effective_shell_thickness)
-    inner_volume = max(part_volume - shell_volume, 0.0)
+    bbox_shell_volume = max(bbox_volume - (inner_x * inner_y * inner_z), 0.0)
 
-    effective_part_extrusion_volume = shell_volume + inner_volume * infill_fraction
+    # Begrenzte Shell-Näherung:
+    # reduziert Überreaktion auf größere line width / layer height
+    shell_volume = min(part_volume, bbox_shell_volume * (packing_ratio ** 0.85))
+
+    infill_fraction = infill_percent / 100.0
+    inner_part_volume = max(part_volume - shell_volume, 0.0)
+
+    effective_part_extrusion_volume = shell_volume + inner_part_volume * infill_fraction
     effective_support_extrusion_volume = 0.0 if support_material_type == "none" else support_volume
 
     out["infill_percent"] = round(infill_percent, 3)
