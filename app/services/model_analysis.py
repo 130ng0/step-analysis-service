@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import math
 import os
 import tempfile
@@ -378,11 +376,10 @@ def _support_analysis_from_mesh(
     weighted_height_sum = 0.0
     critical_area_sum = 0.0
 
-    candidate_indices = []
     candidate_effective_areas = []
     candidate_origins = []
 
-    for idx, (tri, normal, centroid) in enumerate(zip(triangles, normals, centroids)):
+    for tri, normal, centroid in zip(triangles, normals, centroids):
         nz = float(np.dot(normal, z_up))
         if nz >= 0:
             continue
@@ -399,17 +396,19 @@ def _support_analysis_from_mesh(
         origin = centroid.copy()
         origin[2] -= 0.05
 
-        candidate_indices.append(idx)
         candidate_effective_areas.append(effective_area)
         candidate_origins.append(origin)
 
     hit_gaps = {}
-
     if candidate_origins:
         try:
             origins = np.array(candidate_origins)
             directions = np.tile(np.array([[0.0, 0.0, -1.0]]), (len(origins), 1))
-            locations, index_ray, _ = mesh.ray.intersects_location(origins, directions, multiple_hits=False)
+            locations, index_ray, _ = mesh.ray.intersects_location(
+                origins,
+                directions,
+                multiple_hits=False,
+            )
 
             for ray_idx, loc in zip(index_ray, locations):
                 gap = float(origins[ray_idx][2] - loc[2])
@@ -418,7 +417,7 @@ def _support_analysis_from_mesh(
         except Exception:
             hit_gaps = {}
 
-    for local_idx, effective_area, origin in zip(range(len(candidate_indices)), candidate_effective_areas, candidate_origins):
+    for local_idx, effective_area, origin in zip(range(len(candidate_origins)), candidate_effective_areas, candidate_origins):
         if local_idx in hit_gaps:
             support_height = hit_gaps[local_idx]
         else:
@@ -442,62 +441,6 @@ def _support_analysis_from_mesh(
         "average_support_height_mm": round(float(average_support_height), 3),
         "support_volume_mm3": round(float(support_volume), 3),
         "support_volume_cm3": round(float(support_volume) / 1000.0, 3),
-    }
-
-
-def _fallback_orientation_from_bbox(result: Dict, orientation_mode: str) -> str:
-    if orientation_mode == "fixed":
-        return "z_plus"
-
-    dims = {
-        "x_plus": float(result.get("bbox_x_mm") or 0.0),
-        "x_minus": float(result.get("bbox_x_mm") or 0.0),
-        "y_plus": float(result.get("bbox_y_mm") or 0.0),
-        "y_minus": float(result.get("bbox_y_mm") or 0.0),
-        "z_plus": float(result.get("bbox_z_mm") or 0.0),
-        "z_minus": float(result.get("bbox_z_mm") or 0.0),
-    }
-    return min(dims, key=dims.get)
-
-
-def _fallback_support_estimate_from_part(
-    result: Dict,
-    support_density_factor: float,
-    support_angle_deg: float,
-    selected_orientation: str,
-) -> Dict:
-    surface_mm2 = float(result.get("surface_mm2") or 0.0)
-    bbox_x_mm = float(result.get("bbox_x_mm") or 0.0)
-    bbox_y_mm = float(result.get("bbox_y_mm") or 0.0)
-    bbox_z_mm = float(result.get("bbox_z_mm") or 0.0)
-
-    height_map = {
-        "z_plus": bbox_z_mm,
-        "z_minus": bbox_z_mm,
-        "x_plus": bbox_x_mm,
-        "x_minus": bbox_x_mm,
-        "y_plus": bbox_y_mm,
-        "y_minus": bbox_y_mm,
-    }
-    height = height_map[selected_orientation]
-
-    critical_overhang_area_mm2 = surface_mm2 * 0.12
-    average_support_height_mm = height * 0.45
-    support_volume_mm3 = critical_overhang_area_mm2 * average_support_height_mm * support_density_factor
-
-    warnings = list(result.get("warnings", []))
-    warnings.append("Large file fallback support estimate was used to reduce memory usage")
-
-    return {
-        "selected_orientation": selected_orientation,
-        "support_angle_deg": round(support_angle_deg, 3),
-        "support_density_factor": round(support_density_factor, 3),
-        "support_required": support_volume_mm3 > 0,
-        "critical_overhang_area_mm2": round(critical_overhang_area_mm2, 3),
-        "average_support_height_mm": round(average_support_height_mm, 3),
-        "support_volume_mm3": round(support_volume_mm3, 3),
-        "support_volume_cm3": round(support_volume_mm3 / 1000.0, 3),
-        "warnings": warnings,
     }
 
 
@@ -587,6 +530,97 @@ def _best_support_orientation_from_mesh(
     return best
 
 
+def _fallback_orientation_score(
+    base_area: float,
+    height: float,
+    surface_area: float,
+    support_density_factor: float,
+) -> float:
+    est_critical_area = min(surface_area * 0.008, base_area * 0.07)
+    est_support_volume = est_critical_area * (height * 0.45) * support_density_factor
+    return est_support_volume
+
+
+def _fallback_orientation_from_bbox(result: Dict, orientation_mode: str, support_density_factor: float) -> str:
+    if orientation_mode == "fixed":
+        return "z_plus"
+
+    bx = float(result.get("bbox_x_mm") or 0.0)
+    by = float(result.get("bbox_y_mm") or 0.0)
+    bz = float(result.get("bbox_z_mm") or 0.0)
+    surface_area = float(result.get("surface_mm2") or 0.0)
+
+    candidates = {
+        "z_plus": {"base": bx * by, "height": bz},
+        "z_minus": {"base": bx * by, "height": bz},
+        "x_plus": {"base": by * bz, "height": bx},
+        "x_minus": {"base": by * bz, "height": bx},
+        "y_plus": {"base": bx * bz, "height": by},
+        "y_minus": {"base": bx * bz, "height": by},
+    }
+
+    best_key = None
+    best_tuple = None
+    for key, vals in candidates.items():
+        score = _fallback_orientation_score(
+            base_area=vals["base"],
+            height=vals["height"],
+            surface_area=surface_area,
+            support_density_factor=support_density_factor,
+        )
+        ranking = (score, -vals["base"], vals["height"])
+        if best_tuple is None or ranking < best_tuple:
+            best_tuple = ranking
+            best_key = key
+
+    return best_key or "z_plus"
+
+
+def _fallback_support_estimate_from_part(
+    result: Dict,
+    support_density_factor: float,
+    support_angle_deg: float,
+    selected_orientation: str,
+) -> Dict:
+    surface_mm2 = float(result.get("surface_mm2") or 0.0)
+
+    bx = float(result.get("bbox_x_mm") or 0.0)
+    by = float(result.get("bbox_y_mm") or 0.0)
+    bz = float(result.get("bbox_z_mm") or 0.0)
+
+    if selected_orientation in {"z_plus", "z_minus"}:
+        base_area = bx * by
+        height = bz
+    elif selected_orientation in {"x_plus", "x_minus"}:
+        base_area = by * bz
+        height = bx
+    else:
+        base_area = bx * bz
+        height = by
+
+    # Deutlich konservativer Large-File-Fallback:
+    # Ziel ist nicht "maximaler theoretischer Support",
+    # sondern eine realistische Näherung für Gehäuse / Kisten / technische Teile.
+    critical_overhang_area_mm2 = min(surface_mm2 * 0.008, base_area * 0.07)
+    average_support_height_mm = height * 0.45
+    support_volume_mm3 = critical_overhang_area_mm2 * average_support_height_mm * support_density_factor
+
+    warnings = list(result.get("warnings", []))
+    warnings.append("Large file fallback support estimate was used to reduce memory usage")
+
+    return {
+        "selected_orientation": selected_orientation,
+        "support_angle_deg": round(support_angle_deg, 3),
+        "support_density_factor": round(support_density_factor, 3),
+        "support_required": support_volume_mm3 > 0,
+        "critical_overhang_area_mm2": round(critical_overhang_area_mm2, 3),
+        "average_support_height_mm": round(average_support_height_mm, 3),
+        "support_volume_mm3": round(support_volume_mm3, 3),
+        "support_volume_cm3": round(support_volume_mm3 / 1000.0, 3),
+        "warnings": warnings,
+    }
+
+
 def add_support_estimate(
     result: Dict,
     file_bytes: bytes,
@@ -619,7 +653,11 @@ def add_support_estimate(
     fmt = _detect_format(filename)
 
     if fmt == "stl" and _is_large_file(file_bytes, STL_FULL_SUPPORT_MAX_FILE_MB):
-        selected_orientation = _fallback_orientation_from_bbox(out, orientation_mode)
+        selected_orientation = _fallback_orientation_from_bbox(
+            out,
+            orientation_mode,
+            support_density_factor,
+        )
         out.update(
             _fallback_support_estimate_from_part(
                 result=out,
@@ -629,7 +667,11 @@ def add_support_estimate(
             )
         )
     elif fmt == "step" and _is_large_file(file_bytes, STEP_FULL_SUPPORT_MAX_FILE_MB):
-        selected_orientation = _fallback_orientation_from_bbox(out, orientation_mode)
+        selected_orientation = _fallback_orientation_from_bbox(
+            out,
+            orientation_mode,
+            support_density_factor,
+        )
         out.update(
             _fallback_support_estimate_from_part(
                 result=out,
@@ -710,13 +752,11 @@ def add_extrusion_estimate(
 
     bbox_shell_volume = max(bbox_volume - (inner_x * inner_y * inner_z), 0.0)
 
-    # geometrische Schätzung
     shell_volume_geom = min(part_volume, bbox_shell_volume * (packing_ratio ** 0.82))
     inner_part_volume = max(part_volume - shell_volume_geom, 0.0)
     infill_fraction = infill_percent / 100.0
     geometry_based_estimate = shell_volume_geom + inner_part_volume * infill_fraction
 
-    # Mindestquote für technische Gehäuse / strukturreiche Teile
     minimum_fraction = (
         0.12
         + 0.028 * perimeter_count
