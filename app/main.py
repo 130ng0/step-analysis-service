@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import logging
 import time
 import uuid
@@ -12,6 +14,7 @@ from app.security import verify_api_key
 from app.services.model_analysis import (
     ModelAnalysisError,
     UnsupportedFileFormatError,
+    add_extrusion_estimate,
     add_material_estimate,
     add_price_estimate,
     add_runtime_estimate,
@@ -24,7 +27,7 @@ logger = logging.getLogger("step-analysis-service")
 
 app = FastAPI(
     title="3D Model Analysis Service",
-    version="1.7.0",
+    version="1.9.0",
     docs_url="/docs",
     redoc_url="/redoc",
 )
@@ -78,10 +81,17 @@ async def analyze_model(
     volumetric_flow_mm3_s: float | None = Form(default=15.0),
     support_angle_deg: float | None = Form(default=45.0),
     support_density_factor: float | None = Form(default=0.22),
+    orientation_mode: Literal["auto", "fixed"] = Form(default="auto"),
+    infill_percent: float = Form(default=20.0),
+    perimeter_count: int = Form(default=5),
+    top_layers: int = Form(default=5),
+    bottom_layers: int = Form(default=5),
+    line_width_mm: float = Form(default=0.45),
+    layer_height_mm: float = Form(default=0.20),
     part_material_name: str = Form(default="ABS"),
     part_material_price_per_kg_eur: float | None = Form(default=28.0),
     part_material_density_g_cm3: float | None = Form(default=1.04),
-    support_material_type: Literal["breakaway", "hips", "soluble"] = Form(default="breakaway"),
+    support_material_type: Literal["none", "breakaway", "hips", "soluble"] = Form(default="breakaway"),
     support_material_price_per_kg_eur: str | None = Form(default=None),
     support_material_density_g_cm3: str | None = Form(default=None),
     margin_factor: float | None = Form(default=1.0),
@@ -130,11 +140,24 @@ async def analyze_model(
             filename=filename,
             support_angle_deg=support_angle_deg,
             support_density_factor=support_density_factor,
+            support_material_type=support_material_type,
+            orientation_mode=orientation_mode,
+        )
+        result = add_extrusion_estimate(
+            result=result,
+            infill_percent=infill_percent,
+            perimeter_count=perimeter_count,
+            top_layers=top_layers,
+            bottom_layers=bottom_layers,
+            line_width_mm=line_width_mm,
+            layer_height_mm=layer_height_mm,
+            support_material_type=support_material_type,
         )
         result = add_runtime_estimate(
             result=result,
             machine_hour_rate_eur=machine_hour_rate_eur,
             volumetric_flow_mm3_s=volumetric_flow_mm3_s,
+            support_material_type=support_material_type,
         )
         result = add_material_estimate(
             result=result,

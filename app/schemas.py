@@ -8,6 +8,7 @@ class AnalyzeResponse(BaseModel):
     source_format: str = Field(...)
 
     unit: str = "mm"
+    selected_orientation: Optional[str] = None
 
     volume_mm3: float
     volume_cm3: float
@@ -23,6 +24,16 @@ class AnalyzeResponse(BaseModel):
 
     machine_hour_rate_eur: Optional[float] = None
     volumetric_flow_mm3_s: Optional[float] = None
+
+    infill_percent: Optional[float] = None
+    perimeter_count: Optional[int] = None
+    top_layers: Optional[int] = None
+    bottom_layers: Optional[int] = None
+    line_width_mm: Optional[float] = None
+    layer_height_mm: Optional[float] = None
+
+    effective_part_extrusion_volume_mm3: Optional[float] = None
+    effective_support_extrusion_volume_mm3: Optional[float] = None
 
     estimated_print_seconds: Optional[float] = None
     estimated_print_hours: Optional[float] = None

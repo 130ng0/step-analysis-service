@@ -40,6 +40,11 @@ DEFAULT_SUPPORT_SOLUBLE_PRICE_PER_KG_EUR = 80.0
 DEFAULT_SUPPORT_HIPS_DENSITY_G_CM3 = 1.03
 DEFAULT_SUPPORT_SOLUBLE_DENSITY_G_CM3 = 1.20
 
+DEFAULT_LINE_WIDTH_MM = 0.45
+DEFAULT_LAYER_HEIGHT_MM = 0.20
+DEFAULT_PATH_EFFICIENCY_FACTOR = 1.03
+DEFAULT_SUPPORT_SPEED_FACTOR = 0.85
+
 STL_SUPPORT_MAX_FACES = 25000
 STL_FULL_SUPPORT_MAX_FILE_MB = 12
 
@@ -327,6 +332,31 @@ def _load_mesh_for_support(file_bytes: bytes, filename: str) -> trimesh.Trimesh:
             os.unlink(path)
 
 
+def _projected_triangle_area_xy(tri) -> float:
+    return 0.5 * abs(
+        (tri[1][0] - tri[0][0]) * (tri[2][1] - tri[0][1])
+        - (tri[2][0] - tri[0][0]) * (tri[1][1] - tri[0][1])
+    )
+
+
+def _bed_contact_area(mesh: trimesh.Trimesh, layer_height_mm: float = DEFAULT_LAYER_HEIGHT_MM) -> float:
+    triangles = mesh.triangles
+    normals = mesh.face_normals
+
+    z_min = float(mesh.bounds[0][2])
+    threshold = z_min + max(layer_height_mm * 3.0, 0.8)
+
+    contact = 0.0
+    for tri, normal in zip(triangles, normals):
+        avg_z = float((tri[0][2] + tri[1][2] + tri[2][2]) / 3.0)
+        if avg_z > threshold:
+            continue
+        if float(normal[2]) > -0.95:
+            continue
+        contact += _projected_triangle_area_xy(tri)
+    return float(contact)
+
+
 def _support_analysis_from_mesh(
     mesh: trimesh.Trimesh,
     support_angle_deg: float = 45.0,
@@ -354,10 +384,7 @@ def _support_analysis_from_mesh(
         if abs(nz) < cos_threshold:
             continue
 
-        tri_xy_projected_area = 0.5 * abs(
-            (tri[1][0] - tri[0][0]) * (tri[2][1] - tri[0][1])
-            - (tri[2][0] - tri[0][0]) * (tri[1][1] - tri[0][1])
-        )
+        tri_xy_projected_area = _projected_triangle_area_xy(tri)
 
         if tri_xy_projected_area <= 0:
             continue
@@ -389,23 +416,51 @@ def _support_analysis_from_mesh(
     }
 
 
+def _fallback_orientation_from_bbox(result: Dict, orientation_mode: str) -> str:
+    if orientation_mode == "fixed":
+        return "z_plus"
+
+    dims = {
+        "x_plus": float(result.get("bbox_x_mm") or 0.0),
+        "x_minus": float(result.get("bbox_x_mm") or 0.0),
+        "y_plus": float(result.get("bbox_y_mm") or 0.0),
+        "y_minus": float(result.get("bbox_y_mm") or 0.0),
+        "z_plus": float(result.get("bbox_z_mm") or 0.0),
+        "z_minus": float(result.get("bbox_z_mm") or 0.0),
+    }
+    return min(dims, key=dims.get)
+
+
 def _fallback_support_estimate_from_part(
     result: Dict,
     support_density_factor: float,
     support_angle_deg: float,
+    selected_orientation: str,
 ) -> Dict:
-    volume_mm3 = float(result.get("volume_mm3") or 0.0)
     surface_mm2 = float(result.get("surface_mm2") or 0.0)
+    bbox_x_mm = float(result.get("bbox_x_mm") or 0.0)
+    bbox_y_mm = float(result.get("bbox_y_mm") or 0.0)
     bbox_z_mm = float(result.get("bbox_z_mm") or 0.0)
 
+    height_map = {
+        "z_plus": bbox_z_mm,
+        "z_minus": bbox_z_mm,
+        "x_plus": bbox_x_mm,
+        "x_minus": bbox_x_mm,
+        "y_plus": bbox_y_mm,
+        "y_minus": bbox_y_mm,
+    }
+    height = height_map[selected_orientation]
+
     critical_overhang_area_mm2 = surface_mm2 * 0.12
-    average_support_height_mm = bbox_z_mm * 0.45
+    average_support_height_mm = height * 0.45
     support_volume_mm3 = critical_overhang_area_mm2 * average_support_height_mm * support_density_factor
 
     warnings = list(result.get("warnings", []))
     warnings.append("Large file fallback support estimate was used to reduce memory usage")
 
     return {
+        "selected_orientation": selected_orientation,
         "support_angle_deg": round(support_angle_deg, 3),
         "support_density_factor": round(support_density_factor, 3),
         "support_required": support_volume_mm3 > 0,
@@ -417,15 +472,98 @@ def _fallback_support_estimate_from_part(
     }
 
 
+def _orientation_transforms() -> Dict[str, np.ndarray]:
+    return {
+        "z_plus": np.eye(4),
+        "z_minus": trimesh.transformations.rotation_matrix(math.pi, [1, 0, 0]),
+        "x_plus": trimesh.transformations.rotation_matrix(-math.pi / 2, [0, 1, 0]),
+        "x_minus": trimesh.transformations.rotation_matrix(math.pi / 2, [0, 1, 0]),
+        "y_plus": trimesh.transformations.rotation_matrix(math.pi / 2, [1, 0, 0]),
+        "y_minus": trimesh.transformations.rotation_matrix(-math.pi / 2, [1, 0, 0]),
+    }
+
+
+def _evaluate_support_for_orientation(
+    mesh: trimesh.Trimesh,
+    support_angle_deg: float,
+    support_density_factor: float,
+    orientation_name: str,
+    transform: np.ndarray,
+) -> Dict:
+    oriented = mesh.copy()
+    oriented.apply_transform(transform)
+
+    result = _support_analysis_from_mesh(
+        oriented,
+        support_angle_deg=support_angle_deg,
+        support_density_factor=support_density_factor,
+    )
+    result["selected_orientation"] = orientation_name
+    result["build_height_mm"] = float(oriented.extents[2])
+    result["bed_contact_area_mm2"] = round(_bed_contact_area(oriented), 3)
+    return result
+
+
+def _best_support_orientation_from_mesh(
+    mesh: trimesh.Trimesh,
+    support_angle_deg: float,
+    support_density_factor: float,
+    orientation_mode: str,
+) -> Dict:
+    transforms = _orientation_transforms()
+
+    if orientation_mode == "fixed":
+        return _evaluate_support_for_orientation(
+            mesh=mesh,
+            support_angle_deg=support_angle_deg,
+            support_density_factor=support_density_factor,
+            orientation_name="z_plus",
+            transform=transforms["z_plus"],
+        )
+
+    candidates = []
+    for orientation_name, transform in transforms.items():
+        candidates.append(
+            _evaluate_support_for_orientation(
+                mesh=mesh,
+                support_angle_deg=support_angle_deg,
+                support_density_factor=support_density_factor,
+                orientation_name=orientation_name,
+                transform=transform,
+            )
+        )
+
+    min_support = min(c["support_volume_mm3"] for c in candidates)
+    near_best = [
+        c for c in candidates
+        if c["support_volume_mm3"] <= (min_support * 1.05 + 1.0)
+    ]
+
+    near_best.sort(
+        key=lambda c: (
+            c["support_volume_mm3"],
+            -c["bed_contact_area_mm2"],
+            c["build_height_mm"],
+        )
+    )
+    best = near_best[0]
+    best.pop("build_height_mm", None)
+    best.pop("bed_contact_area_mm2", None)
+    return best
+
+
 def add_support_estimate(
     result: Dict,
     file_bytes: bytes,
     filename: str,
     support_angle_deg: float | None,
     support_density_factor: float | None,
+    support_material_type: str | None,
+    orientation_mode: str = "auto",
 ) -> Dict:
     out = dict(result)
 
+    out["selected_orientation"] = "z_plus" if orientation_mode == "fixed" else None
     out["support_angle_deg"] = support_angle_deg
     out["support_density_factor"] = support_density_factor
     out["support_required"] = None
@@ -445,33 +583,91 @@ def add_support_estimate(
 
     fmt = _detect_format(filename)
 
+    # Orientierung auch bei "none" trotzdem optimieren
     if fmt == "stl" and _is_large_file(file_bytes, STL_FULL_SUPPORT_MAX_FILE_MB):
+        selected_orientation = _fallback_orientation_from_bbox(out, orientation_mode)
         out.update(
             _fallback_support_estimate_from_part(
                 result=out,
                 support_density_factor=support_density_factor,
                 support_angle_deg=support_angle_deg,
+                selected_orientation=selected_orientation,
             )
         )
         return out
 
     if fmt == "step" and _is_large_file(file_bytes, STEP_FULL_SUPPORT_MAX_FILE_MB):
+        selected_orientation = _fallback_orientation_from_bbox(out, orientation_mode)
         out.update(
             _fallback_support_estimate_from_part(
                 result=out,
                 support_density_factor=support_density_factor,
                 support_angle_deg=support_angle_deg,
+                selected_orientation=selected_orientation,
             )
         )
         return out
 
     mesh = _load_mesh_for_support(file_bytes=file_bytes, filename=filename)
-    support = _support_analysis_from_mesh(
+    support = _best_support_orientation_from_mesh(
         mesh=mesh,
         support_angle_deg=support_angle_deg,
         support_density_factor=support_density_factor,
+        orientation_mode=orientation_mode,
     )
     out.update(support)
+    return out
+
+
+def add_extrusion_estimate(
+    result: Dict,
+    infill_percent: float = 20.0,
+    perimeter_count: int = 5,
+    top_layers: int = 5,
+    bottom_layers: int = 5,
+    line_width_mm: float = DEFAULT_LINE_WIDTH_MM,
+    layer_height_mm: float = DEFAULT_LAYER_HEIGHT_MM,
+    support_material_type: str = "breakaway",
+) -> Dict:
+    out = dict(result)
+
+    if infill_percent < 0 or infill_percent > 100:
+        raise ModelAnalysisError("infill_percent must be between 0 and 100")
+
+    if perimeter_count < 0 or top_layers < 0 or bottom_layers < 0:
+        raise ModelAnalysisError("perimeter_count, top_layers and bottom_layers must be >= 0")
+
+    if line_width_mm <= 0 or layer_height_mm <= 0:
+        raise ModelAnalysisError("line_width_mm and layer_height_mm must be > 0")
+
+    part_volume = float(out.get("volume_mm3") or 0.0)
+    surface_area = float(out.get("surface_mm2") or 0.0)
+    support_volume = float(out.get("support_volume_mm3") or 0.0)
+
+    infill_fraction = infill_percent / 100.0
+    wall_thickness = perimeter_count * line_width_mm
+    top_bottom_total_thickness = (top_layers + bottom_layers) * layer_height_mm
+
+    # Shell-Modell:
+    # Seitenwände dominieren, Top/Bottom geben zusätzlichen Zuschlag.
+    effective_shell_thickness = wall_thickness + (0.30 * top_bottom_total_thickness)
+
+    shell_volume = min(part_volume, surface_area * effective_shell_thickness)
+    inner_volume = max(part_volume - shell_volume, 0.0)
+
+    effective_part_extrusion_volume = shell_volume + inner_volume * infill_fraction
+    effective_support_extrusion_volume = 0.0 if support_material_type == "none" else support_volume
+
+    out["infill_percent"] = round(infill_percent, 3)
+    out["perimeter_count"] = int(perimeter_count)
+    out["top_layers"] = int(top_layers)
+    out["bottom_layers"] = int(bottom_layers)
+    out["line_width_mm"] = round(line_width_mm, 3)
+    out["layer_height_mm"] = round(layer_height_mm, 3)
+
+    out["effective_part_extrusion_volume_mm3"] = round(effective_part_extrusion_volume, 3)
+    out["effective_support_extrusion_volume_mm3"] = round(effective_support_extrusion_volume, 3)
+
     return out
 
 
@@ -479,6 +675,7 @@ def add_runtime_estimate(
     result: Dict,
     machine_hour_rate_eur: float | None,
     volumetric_flow_mm3_s: float | None,
+    support_material_type: str | None,
 ) -> Dict:
     out = dict(result)
 
@@ -500,16 +697,21 @@ def add_runtime_estimate(
     if machine_hour_rate_eur < 0:
         raise ModelAnalysisError("machine_hour_rate_eur must be >= 0")
 
-    part_volume = float(out["volume_mm3"])
-    support_volume = float(out.get("support_volume_mm3") or 0.0)
+    part_extrusion = float(out.get("effective_part_extrusion_volume_mm3") or 0.0)
+    support_extrusion = float(out.get("effective_support_extrusion_volume_mm3") or 0.0)
 
-    part_seconds = part_volume / volumetric_flow_mm3_s
+    part_seconds = (part_extrusion / volumetric_flow_mm3_s) * DEFAULT_PATH_EFFICIENCY_FACTOR
+
+    if support_material_type == "none":
+        support_seconds = 0.0
+    else:
+        support_seconds = support_extrusion / (volumetric_flow_mm3_s * DEFAULT_SUPPORT_SPEED_FACTOR)
+
     part_hours = part_seconds / 3600.0
-    part_cost = part_hours * machine_hour_rate_eur
-
-    total_volume = part_volume + support_volume
-    total_seconds = total_volume / volumetric_flow_mm3_s
+    total_seconds = part_seconds + support_seconds
     total_hours = total_seconds / 3600.0
+
+    part_cost = part_hours * machine_hour_rate_eur
     total_cost = total_hours * machine_hour_rate_eur
 
     out["estimated_print_seconds"] = round(part_seconds, 2)
@@ -533,8 +735,16 @@ def _resolve_support_material(
 ) -> Dict:
     support_material_type = (support_material_type or DEFAULT_SUPPORT_MATERIAL_TYPE).lower()
 
+    if support_material_type == "none":
+        return {
+            "support_material_type": "none",
+            "support_material_name": "Kein Support",
+            "support_material_price_per_kg_eur": 0.0,
+            "support_material_density_g_cm3": 0.0,
+        }
+
     if support_material_type not in {"breakaway", "hips", "soluble"}:
-        raise ModelAnalysisError("support_material_type must be one of: breakaway, hips, soluble")
+        raise ModelAnalysisError("support_material_type must be one of: none, breakaway, hips, soluble")
 
     support_material_price_per_kg_eur = _to_optional_float(
         support_material_price_per_kg_eur, "support_material_price_per_kg_eur"
@@ -636,11 +846,11 @@ def add_material_estimate(
         part_material_density_g_cm3=part_material_density_g_cm3,
     )
 
-    part_volume_cm3 = float(out.get("volume_cm3") or 0.0)
-    support_volume_cm3 = float(out.get("support_volume_cm3") or 0.0)
+    part_extrusion_mm3 = float(out.get("effective_part_extrusion_volume_mm3") or 0.0)
+    support_extrusion_mm3 = float(out.get("effective_support_extrusion_volume_mm3") or 0.0)
 
-    part_weight_g = part_volume_cm3 * part_material_density_g_cm3
-    support_weight_g = support_volume_cm3 * support_material["support_material_density_g_cm3"]
+    part_weight_g = (part_extrusion_mm3 / 1000.0) * part_material_density_g_cm3
+    support_weight_g = (support_extrusion_mm3 / 1000.0) * support_material["support_material_density_g_cm3"]
 
     part_material_cost_eur = (part_weight_g / 1000.0) * part_material_price_per_kg_eur
     support_material_cost_eur = (support_weight_g / 1000.0) * support_material["support_material_price_per_kg_eur"]
