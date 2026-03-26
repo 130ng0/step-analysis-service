@@ -1,7 +1,10 @@
+from __future__ import annotations
+
 import json
 import pathlib
 import sys
 from typing import Any
+
 
 USER_BASE = pathlib.Path("/workspace/profiles")
 ORCA_RESOURCES = pathlib.Path("/opt/orca/squashfs-root/resources")
@@ -61,18 +64,23 @@ def resolve_profile(profile_name: str, candidates: list[pathlib.Path], seen: set
     return data
 
 
-def strip_meta(data: dict[str, Any]) -> dict[str, Any]:
-    remove_keys = {
-        "inherits",
-        "from",
-        "is_custom_defined",
-        "instantiation",
-        "filament_settings_id",
-        "print_settings_id",
-        "printer_settings_id",
-        "version",
-    }
-    return {k: v for k, v in data.items() if k not in remove_keys}
+def cleanup_profile(data: dict[str, Any], profile_kind: str, original_name: str) -> dict[str, Any]:
+    cleaned = dict(data)
+
+    # Nur wirklich problematische Felder entfernen
+    cleaned.pop("inherits", None)
+
+    # Diese Metadaten explizit setzen
+    cleaned["from"] = "User"
+    cleaned["name"] = cleaned.get("name") or original_name
+    cleaned["type"] = profile_kind
+
+    # Orca mag oft Strings statt bool/int bei manchen Meta-Feldern
+    if "instantiation" in cleaned:
+        if isinstance(cleaned["instantiation"], bool):
+            cleaned["instantiation"] = "true" if cleaned["instantiation"] else "false"
+
+    return cleaned
 
 
 def write_json(path: pathlib.Path, data: dict[str, Any]) -> None:
@@ -101,9 +109,13 @@ def main() -> int:
         ]
     )
 
-    machine = strip_meta(resolve_profile(machine_name, candidates))
-    process = strip_meta(resolve_profile(process_name, candidates))
-    filament = strip_meta(resolve_profile(filament_name, candidates))
+    machine = resolve_profile(machine_name, candidates)
+    process = resolve_profile(process_name, candidates)
+    filament = resolve_profile(filament_name, candidates)
+
+    machine = cleanup_profile(machine, "machine", machine_name)
+    process = cleanup_profile(process, "process", process_name)
+    filament = cleanup_profile(filament, "filament", filament_name)
 
     out_dir = OUT_BASE / output_name
     write_json(out_dir / "printer.json", machine)
