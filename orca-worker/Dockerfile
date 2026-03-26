@@ -20,7 +20,7 @@ RUN apt-get update && apt-get install -y \
 WORKDIR /opt/orca
 
 RUN wget -O OrcaSlicer.AppImage \
-    https://github.com/OrcaSlicer/OrcaSlicer/releases/latest/download/OrcaSlicer_Linux.AppImage
+    https://github.com/OrcaSlicer/OrcaSlicer/releases/download/v2.3.2/OrcaSlicer_Linux_AppImage_Ubuntu2404_V2.3.2.AppImage
 
 RUN chmod +x OrcaSlicer.AppImage
 RUN ./OrcaSlicer.AppImage --appimage-extract
