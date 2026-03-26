@@ -23,7 +23,6 @@ RUN wget -O OrcaSlicer.AppImage \
     https://github.com/OrcaSlicer/OrcaSlicer/releases/latest/download/OrcaSlicer_Linux.AppImage
 
 RUN chmod +x OrcaSlicer.AppImage
-
 RUN ./OrcaSlicer.AppImage --appimage-extract
 
 COPY orca-worker/entrypoint.sh /entrypoint.sh

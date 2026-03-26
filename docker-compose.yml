@@ -10,3 +10,10 @@ services:
     environment:
       STEP_SERVICE_API_KEY: "${STEP_SERVICE_API_KEY}"
       MAX_FILE_SIZE_MB: "100"
+
+  orca-worker:
+    build:
+      context: .
+      dockerfile: orca-worker/Dockerfile
+    container_name: orca-worker
+    restart: unless-stopped
