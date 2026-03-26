@@ -1,0 +1,168 @@
+{
+    "change_filament_gcode": "G92 E0\nSET_VELOCITY_LIMIT ACCEL=3500\nG91\nG1 Z1 F480 ; move Z axis 1mm\nG90 ; set all axes to absolute\n\n; Tool change logic\n{if next_extruder == 0}\n  T1 ; switch to tool head T1\n  ; Cleaning T1\n{if layer_num % 20 == 0} \nG92 E0\nBRUSH_ACTIVE_NOZZLE\n{endif}\nM104 S{first_layer_temperature[1] - standby_temperature_delta }\n  T0 ; switch to tool head T0\n  {if layer_z < 0.39}\n ;BRUSH_ACTIVE_NOZZLE\n  {endif}\n{else}\n  T0 ; switch to tool head T0\n  ; Cleaning T0\n{if layer_num % 20 == 0} \nG92 E0\nBRUSH_ACTIVE_NOZZLE\n{endif}\nM104 S{first_layer_temperature[0] - standby_temperature_delta }\n  T1 ; switch to tool head T1\n  {if layer_z < 0.39}\n    BRUSH_ACTIVE_NOZZLE\n    G91\n    G92 E0\n    G4 S0\n    G90\n  {endif}\n{endif}\n\nG91\nG1 Z-1 F480 ; move Z axis 1mm\nG90 ; set all axes to absolute\nSET_VELOCITY_LIMIT ACCEL=2000\n\n; Tool Change Script Ending\n",
+    "cooling_tube_length": "0",
+    "cooling_tube_retraction": "0",
+    "deretraction_speed": [
+        "35",
+        "35"
+    ],
+    "enable_filament_ramming": "0",
+    "extra_loading_move": "0",
+    "extruder_clearance_height_to_lid": "600",
+    "extruder_clearance_height_to_rod": "600",
+    "extruder_clearance_radius": "100",
+    "extruder_colour": [
+        "#FCE94F",
+        "#FCE94F"
+    ],
+    "extruder_offset": [
+        "0x0",
+        "0x0"
+    ],
+    "from": "User",
+    "gcode_flavor": "klipper",
+    "host_type": "repetier",
+    "inherits": "MyMarlin 0.4 nozzle",
+    "is_custom_defined": "0",
+    "layer_change_gcode": "; AFTER_LAYER_CHANGE\n; [layer_z]\nG92 E0",
+    "long_retractions_when_cut": [
+        "0",
+        "0"
+    ],
+    "machine_end_gcode": "; Starting Ending Script \nG92 E0\nG91 ; set all axes to relative\nG1 Z20 ; move Z axis 20mm\nG90 ; set all axes to absolute\nG28 Y ; home Y axis\nEndposition\nM106 P1 S0 ; deactivate tool fan T1 (v1)\nM106 P0 S0 ; deactivate tool fan T0 (v1)\nM84 ; disable all steppers\nM107 P0 ; deactivate tool fan T0 (v1)\nM107 P1 ; deactivate tool fan T1\nM104 T0 S0\nM104 T1 S0\nM141 S0; set chamber temperature\nLIGHT_ON\nM140 S0 ; turn off heated bed\nT0\n; Ending Script\n\n\n",
+    "machine_max_acceleration_extruding": [
+        "4000"
+    ],
+    "machine_max_acceleration_retracting": [
+        "5000"
+    ],
+    "machine_max_acceleration_x": [
+        "5000"
+    ],
+    "machine_max_acceleration_y": [
+        "5000"
+    ],
+    "machine_max_acceleration_z": [
+        "400"
+    ],
+    "machine_max_jerk_e": [
+        "2"
+    ],
+    "machine_max_jerk_x": [
+        "20"
+    ],
+    "machine_max_jerk_y": [
+        "20"
+    ],
+    "machine_max_jerk_z": [
+        "5"
+    ],
+    "machine_max_speed_e": [
+        "20"
+    ],
+    "machine_max_speed_z": [
+        "20"
+    ],
+    "machine_start_gcode": ";STARTSCRIPT EL-140V3 v.1.1\nT0\nbed_mesh_clear\nG92 E0\nM141 S[chamber_temperature] ; Start der Kammerheizung\nM140 S{first_layer_bed_temperature[initial_tool]} ; Heize Bett\nG28\nM190 S{first_layer_bed_temperature[initial_tool]} ; Warte auf Bett\nG1 Z10 F480\nG1 X200 Y200 F10000\nG1 Z2 F480\nM109 T0 S150\nBRUSH_ACTIVE_NOZZLE\nMEASURE_TILT\nG28 Z\nT0\nBED_MESH_CALIBRATE\nG28 P\n; === Heize nur verwendete Düsen ===\n{if is_extruder_used[0]}M104 T0 S{first_layer_temperature[0]}{endif}\n{if is_extruder_used[1]}M104 T1 S{first_layer_temperature[1]}{endif}\n\n; === Deaktiviere nicht verwendete Düsen ===\n{if not is_extruder_used[0]}M104 T0 S0{endif}\n{if not is_extruder_used[1]}M104 T1 S0{endif}\n\n; === Warte auf aktive Düsen ===\nG4 S150\n\nM107 P1 ; Gehäuselüfter aus\nM107 P0 ; Tool-Lüfter aus\n\n; === Aktives Werkzeug setzen ===\nT{initial_tool}\nG90 ; absolute Positionierung\n",
+    "machine_tool_change_time": "3",
+    "max_layer_height": [
+        "0.8",
+        "0.8"
+    ],
+    "min_layer_height": [
+        "0.15",
+        "0.15"
+    ],
+    "name": "EL-140V3 v.2.0",
+    "nozzle_diameter": [
+        "0.4",
+        "0.4"
+    ],
+    "nozzle_type": "brass",
+    "parking_pos_retraction": "0",
+    "print_host": "192.168.208.144",
+    "printable_area": [
+        "0x43",
+        "570x43",
+        "570x457",
+        "0x457"
+    ],
+    "printable_height": "570",
+    "printer_notes": "EL-140V3",
+    "printer_settings_id": "EL-140V3 v.2.0",
+    "printhost_apikey": "cc990130-50eb-452b-b621-4d83b7e19c40",
+    "printhost_port": "Klipper",
+    "purge_in_prime_tower": "0",
+    "retract_before_wipe": [
+        "100%",
+        "100%"
+    ],
+    "retract_length_toolchange": [
+        "3",
+        "3"
+    ],
+    "retract_lift_above": [
+        "0.5",
+        "0.5"
+    ],
+    "retract_lift_below": [
+        "0",
+        "0"
+    ],
+    "retract_lift_enforce": [
+        "Top Only",
+        "Top Only"
+    ],
+    "retract_restart_extra": [
+        "0",
+        "0"
+    ],
+    "retract_restart_extra_toolchange": [
+        "-0.2",
+        "-0.2"
+    ],
+    "retract_when_changing_layer": [
+        "0",
+        "0"
+    ],
+    "retraction_distances_when_cut": [
+        "18",
+        "18"
+    ],
+    "retraction_length": [
+        "0.4",
+        "0.4"
+    ],
+    "retraction_minimum_travel": [
+        "2",
+        "2"
+    ],
+    "retraction_speed": [
+        "35",
+        "35"
+    ],
+    "single_extruder_multi_material": "0",
+    "thumbnails": "48x48/PNG, 300x300/PNG",
+    "time_cost": "4",
+    "travel_slope": [
+        "3",
+        "3"
+    ],
+    "version": "2.0.2.0",
+    "wipe": [
+        "1",
+        "1"
+    ],
+    "wipe_distance": [
+        "1",
+        "1"
+    ],
+    "z_hop": [
+        "0.3",
+        "0.3"
+    ],
+    "z_hop_types": [
+        "Normal Lift",
+        "Normal Lift"
+    ]
+}

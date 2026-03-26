@@ -39,6 +39,9 @@ RUN chmod +x OrcaSlicer.AppImage
 RUN ./OrcaSlicer.AppImage --appimage-extract
 
 COPY orca-worker/entrypoint.sh /entrypoint.sh
+COPY orca-worker/orca-profiles /seed/profiles
+COPY orca-worker/stl-test /seed/stl-test
+
 RUN chmod +x /entrypoint.sh
 
 WORKDIR /workspace
