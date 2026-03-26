@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import json
 import pathlib
 import sys
@@ -66,21 +64,63 @@ def resolve_profile(profile_name: str, candidates: list[pathlib.Path], seen: set
 
 def cleanup_profile(data: dict[str, Any], profile_kind: str, original_name: str) -> dict[str, Any]:
     cleaned = dict(data)
-
-    # Nur wirklich problematische Felder entfernen
     cleaned.pop("inherits", None)
-
-    # Diese Metadaten explizit setzen
     cleaned["from"] = "User"
     cleaned["name"] = cleaned.get("name") or original_name
     cleaned["type"] = profile_kind
-
-    # Orca mag oft Strings statt bool/int bei manchen Meta-Feldern
-    if "instantiation" in cleaned:
-        if isinstance(cleaned["instantiation"], bool):
-            cleaned["instantiation"] = "true" if cleaned["instantiation"] else "false"
-
     return cleaned
+
+
+def patch_process_for_printer(process: dict[str, Any], printer: dict[str, Any]) -> dict[str, Any]:
+    patched = dict(process)
+
+    printer_name = printer.get("name")
+    printer_model = printer.get("printer_model")
+    printer_variant = printer.get("printer_variant")
+    printer_structure = printer.get("printer_structure")
+    nozzle = printer.get("nozzle_diameter")
+
+    if printer_name:
+        patched["compatible_printers"] = [printer_name]
+
+    if printer_model:
+        patched["compatible_printer_model"] = [printer_model]
+
+    if printer_variant:
+        patched["printer_variant"] = printer_variant
+
+    if printer_structure:
+        patched["printer_structure"] = printer_structure
+
+    if nozzle is not None:
+        if isinstance(nozzle, list):
+            patched["supported_nozzle_diameters"] = nozzle
+        else:
+            patched["supported_nozzle_diameters"] = [str(nozzle)]
+
+    return patched
+
+
+def patch_filament_for_printer(filament: dict[str, Any], printer: dict[str, Any]) -> dict[str, Any]:
+    patched = dict(filament)
+
+    printer_name = printer.get("name")
+    printer_model = printer.get("printer_model")
+    nozzle = printer.get("nozzle_diameter")
+
+    if printer_name:
+        patched["compatible_printers"] = [printer_name]
+
+    if printer_model:
+        patched["compatible_printer_model"] = [printer_model]
+
+    if nozzle is not None:
+        if isinstance(nozzle, list):
+            patched["supported_nozzle_diameters"] = nozzle
+        else:
+            patched["supported_nozzle_diameters"] = [str(nozzle)]
+
+    return patched
 
 
 def write_json(path: pathlib.Path, data: dict[str, Any]) -> None:
@@ -116,6 +156,9 @@ def main() -> int:
     machine = cleanup_profile(machine, "machine", machine_name)
     process = cleanup_profile(process, "process", process_name)
     filament = cleanup_profile(filament, "filament", filament_name)
+
+    process = patch_process_for_printer(process, machine)
+    filament = patch_filament_for_printer(filament, machine)
 
     out_dir = OUT_BASE / output_name
     write_json(out_dir / "printer.json", machine)
