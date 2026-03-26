@@ -15,12 +15,16 @@ RUN apt-get update && apt-get install -y \
     libfuse2 \
     file \
     xz-utils \
+    libpangoft2-1.0-0 \
+    libpangocairo-1.0-0 \
+    libatk1.0-0 \
+    libgtk-3-0 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /opt/orca
 
 RUN wget -O OrcaSlicer.AppImage \
-    https://github.com/OrcaSlicer/OrcaSlicer/releases/download/v2.3.2/OrcaSlicer_Linux_AppImage_Ubuntu2404_V2.3.2.AppImage
+    https://github.com/OrcaSlicer/OrcaSlicer/releases/download/v2.3.1/OrcaSlicer_Linux_AppImage_V2.3.1.AppImage
 
 RUN chmod +x OrcaSlicer.AppImage
 RUN ./OrcaSlicer.AppImage --appimage-extract
