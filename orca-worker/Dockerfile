@@ -27,6 +27,7 @@ RUN apt-get update && apt-get install -y \
     libsoup-3.0-0 \
     libjavascriptcoregtk-4.1-0 \
     libwebkit2gtk-4.1-0 \
+    libmspack0 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /opt/orca
