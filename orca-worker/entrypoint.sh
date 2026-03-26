@@ -6,9 +6,11 @@ echo "[orca-worker] container started"
 mkdir -p /workspace/profiles
 mkdir -p /workspace/stl-test
 mkdir -p /workspace/out
+mkdir -p /workspace/templates
 
 cp -rn /seed/profiles/* /workspace/profiles/ 2>/dev/null || true
 cp -rn /seed/stl-test/* /workspace/stl-test/ 2>/dev/null || true
+cp -rn /seed/templates/* /workspace/templates/ 2>/dev/null || true
 
 echo "[orca-worker] profiles in /workspace/profiles:"
 ls -1 /workspace/profiles || true
