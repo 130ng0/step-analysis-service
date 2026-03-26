@@ -22,6 +22,8 @@ RUN apt-get update && apt-get install -y \
     libpangocairo-1.0-0 \
     libatk1.0-0 \
     libgtk-3-0 \
+    libgstreamer1.0-0 \
+    libgstreamer-plugins-base1.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /opt/orca
