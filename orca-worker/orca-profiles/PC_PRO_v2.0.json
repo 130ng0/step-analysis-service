@@ -1,0 +1,103 @@
+{
+    "chamber_temperature": [
+        "80"
+    ],
+    "close_fan_the_first_x_layers": [
+        "2"
+    ],
+    "default_filament_colour": [
+        "#80FF00"
+    ],
+    "enable_pressure_advance": [
+        "1"
+    ],
+    "fan_cooling_layer_time": [
+        "15"
+    ],
+    "fan_max_speed": [
+        "20"
+    ],
+    "fan_min_speed": [
+        "20"
+    ],
+    "filament_cost": [
+        "41"
+    ],
+    "filament_deretraction_speed": [
+        "30"
+    ],
+    "filament_flow_ratio": [
+        "0.97"
+    ],
+    "filament_max_volumetric_speed": [
+        "15"
+    ],
+    "filament_notes": [
+        "Pls dry the filament!\n8h-12h 80°C"
+    ],
+    "filament_retraction_length": [
+        "0.3"
+    ],
+    "filament_retraction_speed": [
+        "30"
+    ],
+    "filament_settings_id": [
+        "PC PRO v2.0"
+    ],
+    "filament_type": [
+        "PC PRO"
+    ],
+    "filament_vendor": [
+        "NEVO3D"
+    ],
+    "from": "User",
+    "full_fan_speed_layer": [
+        "4"
+    ],
+    "hot_plate_temp": [
+        "110"
+    ],
+    "hot_plate_temp_initial_layer": [
+        "110"
+    ],
+    "inherits": "eSUN PLA+ @System",
+    "internal_bridge_fan_speed": [
+        "30"
+    ],
+    "ironing_fan_speed": [
+        "0"
+    ],
+    "is_custom_defined": "0",
+    "name": "PC PRO v2.0",
+    "nozzle_temperature": [
+        "245"
+    ],
+    "nozzle_temperature_initial_layer": [
+        "250"
+    ],
+    "nozzle_temperature_range_high": [
+        "280"
+    ],
+    "nozzle_temperature_range_low": [
+        "245"
+    ],
+    "overhang_fan_speed": [
+        "60"
+    ],
+    "overhang_fan_threshold": [
+        "95%"
+    ],
+    "slow_down_layer_time": [
+        "20"
+    ],
+    "slow_down_min_speed": [
+        "20"
+    ],
+    "support_material_interface_fan_speed": [
+        "30"
+    ],
+    "temperature_vitrification": [
+        "80"
+    ],
+    "version": "2.3.0.4"
+}
