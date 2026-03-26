@@ -41,6 +41,7 @@ RUN ./OrcaSlicer.AppImage --appimage-extract
 COPY orca-worker/entrypoint.sh /entrypoint.sh
 COPY orca-worker/orca-profiles /seed/profiles
 COPY orca-worker/stl-test /seed/stl-test
+COPY orca-worker/resolve_profiles.py /workspace/resolve_profiles.py
 
 RUN chmod +x /entrypoint.sh
 
