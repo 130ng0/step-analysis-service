@@ -6,15 +6,16 @@ RUN apt-get update && apt-get install -y \
     wget \
     curl \
     ca-certificates \
+    file \
+    xz-utils \
+    libfuse2 \
     libgl1 \
+    libegl1 \
     libglib2.0-0 \
     libxrender1 \
     libxext6 \
     libsm6 \
     libx11-6 \
-    libfuse2 \
-    file \
-    xz-utils \
     libpangoft2-1.0-0 \
     libpangocairo-1.0-0 \
     libatk1.0-0 \
