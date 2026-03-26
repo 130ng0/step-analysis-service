@@ -11,6 +11,7 @@ RUN apt-get update && apt-get install -y \
     libfuse2 \
     libgl1 \
     libegl1 \
+    libopengl0 \
     libglib2.0-0 \
     libxrender1 \
     libxext6 \
