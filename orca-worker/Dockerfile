@@ -12,6 +12,7 @@ RUN apt-get update && apt-get install -y \
     libgl1 \
     libegl1 \
     libopengl0 \
+    libglu1-mesa \
     libglib2.0-0 \
     libxrender1 \
     libxext6 \
