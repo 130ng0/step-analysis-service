@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import logging
+import os
+import tempfile
 import time
 import uuid
 from typing import Literal
@@ -21,13 +23,14 @@ from app.services.model_analysis import (
     add_support_estimate,
     analyze_model_file_bytes,
 )
+from orca_runner import OrcaSliceError, run_orca_slice
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("step-analysis-service")
 
 app = FastAPI(
     title="3D Model Analysis Service",
-    version="1.9.0",
+    version="2.0.0",
     docs_url="/docs",
     redoc_url="/redoc",
 )
@@ -70,12 +73,14 @@ def health():
 
 @app.post(
     "/analyze-model",
-    response_model=AnalyzeResponse,
+    response_model=None,
     responses={400: {"model": ErrorResponse}, 401: {"model": ErrorResponse}, 500: {"model": ErrorResponse}},
     dependencies=[Depends(verify_api_key)],
 )
 async def analyze_model(
     file: UploadFile = File(...),
+    calculation_method: Literal["slice", "fast"] = Form(default="slice"),
+    material_profile: Literal["abs", "abs_cf", "abs_esd", "asa", "pc", "pc_cf", "pc_fr", "tpu"] = Form(default="abs"),
     unit: str = Form(default="mm"),
     machine_hour_rate_eur: float | None = Form(default=8.0),
     volumetric_flow_mm3_s: float | None = Form(default=15.0),
@@ -128,6 +133,79 @@ async def analyze_model(
             },
         )
 
+    # -----------------------------
+    # SLICE MODE (DEFAULT)
+    # -----------------------------
+    if calculation_method == "slice":
+        tmp_path = None
+        try:
+            suffix = os.path.splitext(filename)[1].lower() or ".stl"
+            with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+                tmp.write(file_bytes)
+                tmp_path = tmp.name
+
+            slice_result = run_orca_slice(tmp_path, material_profile)
+
+            print_time_hours = float(slice_result.get("print_time_hours") or 0.0)
+            material_cost_eur_total = float(slice_result.get("material_cost_eur_total") or 0.0)
+            filament_weight_g_total = float(slice_result.get("filament_weight_g_total") or 0.0)
+            filament_volume_cm3_total = float(slice_result.get("filament_volume_cm3_total") or 0.0)
+
+            machine_cost_eur = round(print_time_hours * float(machine_hour_rate_eur or 0.0), 2)
+            subtotal_cost_eur = round(machine_cost_eur + material_cost_eur_total, 2)
+            total_price_eur = round(subtotal_cost_eur * float(margin_factor or 1.0), 2)
+
+            return {
+                "success": True,
+                "filename": filename,
+                "method": "slice",
+                "material_profile": material_profile,
+                "unit": unit,
+                "machine_hour_rate_eur": machine_hour_rate_eur,
+                "margin_factor": margin_factor,
+                "print_time_minutes": slice_result.get("print_time_minutes", 0),
+                "print_time_hours": print_time_hours,
+                "filament_length_mm_total": slice_result.get("filament_length_mm_total", 0.0),
+                "filament_volume_cm3_total": filament_volume_cm3_total,
+                "filament_weight_g_total": filament_weight_g_total,
+                "material_cost_eur_total": material_cost_eur_total,
+                "machine_cost_eur": machine_cost_eur,
+                "subtotal_cost_eur": subtotal_cost_eur,
+                "total_price_eur": total_price_eur,
+                "tools": slice_result.get("tools", []),
+            }
+
+        except OrcaSliceError as exc:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "success": False,
+                    "error": "SLICE_FAILED",
+                    "details": str(exc),
+                    "filename": filename,
+                },
+            )
+        except Exception as exc:
+            logger.exception("slice_mode_unexpected_error filename=%s", filename)
+            return JSONResponse(
+                status_code=500,
+                content={
+                    "success": False,
+                    "error": "INTERNAL_SERVER_ERROR",
+                    "details": str(exc),
+                    "filename": filename,
+                },
+            )
+        finally:
+            if tmp_path and os.path.exists(tmp_path):
+                try:
+                    os.unlink(tmp_path)
+                except Exception:
+                    pass
+
+    # -----------------------------
+    # FAST MODE (EXISTING LOGIC)
+    # -----------------------------
     try:
         result = analyze_model_file_bytes(
             file_bytes=file_bytes,
@@ -172,6 +250,8 @@ async def analyze_model(
             result=result,
             margin_factor=margin_factor,
         )
+        result["method"] = "fast"
+        result["material_profile"] = material_profile
         return result
 
     except UnsupportedFileFormatError as exc:
