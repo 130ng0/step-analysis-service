@@ -6,12 +6,14 @@ import re
 import shutil
 import subprocess
 import tempfile
+import zipfile
+from pathlib import Path
 from typing import Dict, List, Literal
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
 
-app = FastAPI(title="Orca Worker API", version="1.0.0")
+app = FastAPI(title="Orca Worker API", version="1.1.0")
 
 ORCA_PATH = "/opt/orca/squashfs-root/AppRun"
 TEMPLATE_DIR = "/workspace/templates"
@@ -112,10 +114,10 @@ def run_orca_slice(stl_path: str, material: str) -> Dict:
         output_dir = os.path.join(tmpdir, "out")
         os.makedirs(output_dir, exist_ok=True)
 
-        # Aktuell slicen wir die 3MF-Vorlage direkt.
-        # Nächster Ausbau: hochgeladene STL in die Vorlage injizieren.
         work_3mf = os.path.join(tmpdir, os.path.basename(template_file))
         shutil.copy2(template_file, work_3mf)
+
+        inject_stl_into_3mf(work_3mf, stl_path)
 
         cmd = [
             ORCA_PATH,
@@ -141,6 +143,44 @@ def run_orca_slice(stl_path: str, material: str) -> Dict:
 
         parsed = parse_gcode(gcode_path)
         return parsed
+
+
+def inject_stl_into_3mf(three_mf_path: str, stl_path: str) -> None:
+    """
+    Ersetzt in der 3MF genau die eine enthaltene STL (z.B. test.stl) durch die hochgeladene STL.
+    Dabei bleibt der Dateiname IN der 3MF gleich, damit Referenzen in der 3MF nicht kaputtgehen.
+    """
+    temp_extract_dir = tempfile.mkdtemp(prefix="three_mf_extract_")
+    try:
+        with zipfile.ZipFile(three_mf_path, "r") as zf:
+            zf.extractall(temp_extract_dir)
+
+        extracted = Path(temp_extract_dir)
+
+        # Suche nach genau einer STL innerhalb der 3MF
+        stl_files = list(extracted.rglob("*.stl"))
+        if not stl_files:
+            raise OrcaSliceError("No STL file found inside template 3MF")
+        if len(stl_files) != 1:
+            raise OrcaSliceError(f"Expected exactly 1 STL inside template 3MF, found {len(stl_files)}")
+
+        target_internal_stl = stl_files[0]
+
+        # Hochgeladene STL an Stelle der Template-STL kopieren
+        shutil.copy2(stl_path, target_internal_stl)
+
+        # 3MF neu packen
+        rebuilt_3mf = three_mf_path + ".rebuilt"
+        with zipfile.ZipFile(rebuilt_3mf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            for file_path in extracted.rglob("*"):
+                if file_path.is_file():
+                    arcname = file_path.relative_to(extracted).as_posix()
+                    zf.write(file_path, arcname)
+
+        os.replace(rebuilt_3mf, three_mf_path)
+
+    finally:
+        shutil.rmtree(temp_extract_dir, ignore_errors=True)
 
 
 def _split_csv_header_values(raw: str) -> List[str]:
