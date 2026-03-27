@@ -1,10 +1,17 @@
+from __future__ import annotations
+
 import math
 import os
 import re
 import shutil
 import subprocess
 import tempfile
-from typing import Dict, List
+from typing import Dict, List, Literal
+
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi.responses import JSONResponse
+
+app = FastAPI(title="Orca Worker API", version="1.0.0")
 
 ORCA_PATH = "/opt/orca/squashfs-root/AppRun"
 TEMPLATE_DIR = "/workspace/templates"
@@ -26,6 +33,70 @@ class OrcaSliceError(Exception):
     pass
 
 
+@app.get("/health")
+def health():
+    return {"status": "ok"}
+
+
+@app.post("/slice")
+async def slice_model(
+    file: UploadFile = File(...),
+    material_profile: Literal["abs", "abs_cf", "abs_esd", "asa", "pc", "pc_cf", "pc_fr", "tpu"] = Form(default="abs"),
+):
+    filename = file.filename or "model.stl"
+    suffix = os.path.splitext(filename)[1].lower()
+
+    if suffix != ".stl":
+        raise HTTPException(status_code=400, detail="Only STL files are currently supported for Orca slicing")
+
+    file_bytes = await file.read()
+    if not file_bytes:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty")
+
+    tmp_input = None
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".stl") as tmp:
+            tmp.write(file_bytes)
+            tmp_input = tmp.name
+
+        result = run_orca_slice(tmp_input, material_profile)
+
+        return {
+            "success": True,
+            "filename": filename,
+            "method": "slice",
+            "material_profile": material_profile,
+            **result,
+        }
+
+    except OrcaSliceError as exc:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "success": False,
+                "error": "SLICE_FAILED",
+                "details": str(exc),
+                "filename": filename,
+            },
+        )
+    except Exception as exc:
+        return JSONResponse(
+            status_code=500,
+            content={
+                "success": False,
+                "error": "INTERNAL_SERVER_ERROR",
+                "details": str(exc),
+                "filename": filename,
+            },
+        )
+    finally:
+        if tmp_input and os.path.exists(tmp_input):
+            try:
+                os.unlink(tmp_input)
+            except Exception:
+                pass
+
+
 def run_orca_slice(stl_path: str, material: str) -> Dict:
     if material not in TEMPLATE_MAP:
         raise OrcaSliceError(f"Unsupported material profile: {material}")
@@ -41,8 +112,8 @@ def run_orca_slice(stl_path: str, material: str) -> Dict:
         output_dir = os.path.join(tmpdir, "out")
         os.makedirs(output_dir, exist_ok=True)
 
-        # Für den Moment slicen wir die 3MF-Vorlage direkt.
-        # Nächster Schritt wird dann: hochgeladenes STL in die Vorlage einsetzen.
+        # Aktuell slicen wir die 3MF-Vorlage direkt.
+        # Nächster Ausbau: hochgeladene STL in die Vorlage injizieren.
         work_3mf = os.path.join(tmpdir, os.path.basename(template_file))
         shutil.copy2(template_file, work_3mf)
 
@@ -65,19 +136,15 @@ def run_orca_slice(stl_path: str, material: str) -> Dict:
             )
 
         gcode_path = os.path.join(output_dir, "plate_1.gcode")
-        result_json_path = os.path.join(output_dir, "result.json")
-
         if not os.path.exists(gcode_path):
             raise OrcaSliceError("plate_1.gcode was not generated")
 
         parsed = parse_gcode(gcode_path)
-        parsed["result_json_path"] = result_json_path
-        parsed["gcode_path"] = gcode_path
         return parsed
 
 
 def _split_csv_header_values(raw: str) -> List[str]:
-    return [x.strip().strip('"') for x in raw.split(",") if x.strip()]
+    return [x.strip().strip('"') for x in raw.replace(";", ",").split(",") if x.strip()]
 
 
 def _parse_header_list(raw: str, cast=float) -> List:
@@ -104,7 +171,6 @@ def parse_gcode(gcode_path: str) -> Dict:
         for line in f:
             s = line.strip()
 
-            # Header-Werte
             if s.startswith("; filament_density:"):
                 raw = s.split(":", 1)[1].strip()
                 filament_density_list = _parse_header_list(raw, float)
@@ -119,22 +185,19 @@ def parse_gcode(gcode_path: str) -> Dict:
 
             elif s.startswith("; filament_type ="):
                 raw = s.split("=", 1)[1].strip()
-                filament_type_list = _split_csv_header_values(raw.replace(";", ","))
+                filament_type_list = _split_csv_header_values(raw)
 
-            # Zeit
             elif s.startswith("M73 ") and print_time_min is None:
                 match = re.search(r"\bR(\d+)\b", s)
                 if match:
                     print_time_min = int(match.group(1))
 
-            # Toolwechsel
             elif re.fullmatch(r"T\d+", s):
                 try:
                     current_tool = int(s[1:])
                 except Exception:
                     current_tool = 0
 
-            # Relative Extrusion (M83 im GCode)
             elif ("G0" in s or "G1" in s) and "E" in s:
                 match = re.search(r"\bE(-?\d+(?:\.\d+)?)\b", s)
                 if match:
@@ -142,7 +205,6 @@ def parse_gcode(gcode_path: str) -> Dict:
                     if e_val > 0:
                         extrusion_per_tool_mm[current_tool] = extrusion_per_tool_mm.get(current_tool, 0.0) + e_val
 
-    # Defaults
     if not filament_diameter_list:
         filament_diameter_list = [FILAMENT_DIAMETER_MM_DEFAULT]
     if not filament_density_list:

@@ -8,6 +8,8 @@ RUN apt-get update && apt-get install -y \
     ca-certificates \
     file \
     xz-utils \
+    python3 \
+    python3-pip \
     libfuse2 \
     libgl1 \
     libegl1 \
@@ -30,6 +32,8 @@ RUN apt-get update && apt-get install -y \
     libmspack0 \
     && rm -rf /var/lib/apt/lists/*
 
+RUN pip3 install --break-system-packages fastapi uvicorn python-multipart
+
 WORKDIR /opt/orca
 
 RUN wget -O OrcaSlicer.AppImage \
@@ -38,14 +42,14 @@ RUN wget -O OrcaSlicer.AppImage \
 RUN chmod +x OrcaSlicer.AppImage
 RUN ./OrcaSlicer.AppImage --appimage-extract
 
+WORKDIR /workspace
+
+COPY orca-worker/api.py /workspace/api.py
 COPY orca-worker/entrypoint.sh /entrypoint.sh
 COPY orca-worker/orca-profiles /seed/profiles
 COPY orca-worker/stl-test /seed/stl-test
-COPY orca-worker/resolve_profiles.py /workspace/resolve_profiles.py
 COPY orca-worker/templates /seed/templates
 
 RUN chmod +x /entrypoint.sh
-
-WORKDIR /workspace
 
 ENTRYPOINT ["/entrypoint.sh"]

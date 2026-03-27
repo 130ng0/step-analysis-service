@@ -2,16 +2,16 @@ from __future__ import annotations
 
 import logging
 import os
-import tempfile
 import time
 import uuid
 from typing import Literal
 
+import requests
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse
 
 from app.config import ALLOWED_EXTENSIONS, MAX_FILE_SIZE_BYTES
-from app.schemas import AnalyzeResponse, ErrorResponse
+from app.schemas import ErrorResponse
 from app.security import verify_api_key
 from app.services.model_analysis import (
     ModelAnalysisError,
@@ -23,17 +23,18 @@ from app.services.model_analysis import (
     add_support_estimate,
     analyze_model_file_bytes,
 )
-from app.orca_runner import OrcaSliceError, run_orca_slice
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("step-analysis-service")
 
 app = FastAPI(
     title="3D Model Analysis Service",
-    version="2.0.0",
+    version="2.1.0",
     docs_url="/docs",
     redoc_url="/redoc",
 )
+
+ORCA_WORKER_URL = os.getenv("ORCA_WORKER_URL", "http://orca-worker:8090")
 
 
 @app.middleware("http")
@@ -68,7 +69,20 @@ async def log_requests(request: Request, call_next):
 
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    worker_status = "unknown"
+    try:
+        r = requests.get(f"{ORCA_WORKER_URL}/health", timeout=5)
+        if r.ok:
+            worker_status = "ok"
+        else:
+            worker_status = f"error:{r.status_code}"
+    except Exception:
+        worker_status = "unreachable"
+
+    return {
+        "status": "ok",
+        "orca_worker": worker_status,
+    }
 
 
 @app.post(
@@ -133,23 +147,51 @@ async def analyze_model(
             },
         )
 
-    # -----------------------------
+    # ------------------------------------------------------------------
     # SLICE MODE (DEFAULT)
-    # -----------------------------
+    # ------------------------------------------------------------------
     if calculation_method == "slice":
-        tmp_path = None
         try:
-            suffix = os.path.splitext(filename)[1].lower() or ".stl"
-            with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-                tmp.write(file_bytes)
-                tmp_path = tmp.name
+            files = {
+                "file": (filename, file_bytes, "application/octet-stream"),
+            }
+            data = {
+                "material_profile": material_profile,
+            }
 
-            slice_result = run_orca_slice(tmp_path, material_profile)
+            response = requests.post(
+                f"{ORCA_WORKER_URL}/slice",
+                files=files,
+                data=data,
+                timeout=300,
+            )
 
-            print_time_hours = float(slice_result.get("print_time_hours") or 0.0)
-            material_cost_eur_total = float(slice_result.get("material_cost_eur_total") or 0.0)
-            filament_weight_g_total = float(slice_result.get("filament_weight_g_total") or 0.0)
-            filament_volume_cm3_total = float(slice_result.get("filament_volume_cm3_total") or 0.0)
+            try:
+                payload = response.json()
+            except Exception:
+                payload = {
+                    "success": False,
+                    "error": "INVALID_WORKER_RESPONSE",
+                    "details": response.text,
+                    "filename": filename,
+                }
+
+            if response.status_code >= 400 or not payload.get("success"):
+                return JSONResponse(
+                    status_code=400,
+                    content={
+                        "success": False,
+                        "error": "SLICE_FAILED",
+                        "details": payload.get("details") or payload.get("error") or "Unknown Orca worker error",
+                        "filename": filename,
+                    },
+                )
+
+            print_time_hours = float(payload.get("print_time_hours") or 0.0)
+            material_cost_eur_total = float(payload.get("material_cost_eur_total") or 0.0)
+            filament_weight_g_total = float(payload.get("filament_weight_g_total") or 0.0)
+            filament_volume_cm3_total = float(payload.get("filament_volume_cm3_total") or 0.0)
+            filament_length_mm_total = float(payload.get("filament_length_mm_total") or 0.0)
 
             machine_cost_eur = round(print_time_hours * float(machine_hour_rate_eur or 0.0), 2)
             subtotal_cost_eur = round(machine_cost_eur + material_cost_eur_total, 2)
@@ -163,24 +205,25 @@ async def analyze_model(
                 "unit": unit,
                 "machine_hour_rate_eur": machine_hour_rate_eur,
                 "margin_factor": margin_factor,
-                "print_time_minutes": slice_result.get("print_time_minutes", 0),
+                "print_time_minutes": payload.get("print_time_minutes", 0),
                 "print_time_hours": print_time_hours,
-                "filament_length_mm_total": slice_result.get("filament_length_mm_total", 0.0),
-                "filament_volume_cm3_total": filament_volume_cm3_total,
-                "filament_weight_g_total": filament_weight_g_total,
-                "material_cost_eur_total": material_cost_eur_total,
+                "filament_length_mm_total": round(filament_length_mm_total, 3),
+                "filament_volume_cm3_total": round(filament_volume_cm3_total, 3),
+                "filament_weight_g_total": round(filament_weight_g_total, 3),
+                "material_cost_eur_total": round(material_cost_eur_total, 2),
                 "machine_cost_eur": machine_cost_eur,
                 "subtotal_cost_eur": subtotal_cost_eur,
                 "total_price_eur": total_price_eur,
-                "tools": slice_result.get("tools", []),
+                "tools": payload.get("tools", []),
             }
 
-        except OrcaSliceError as exc:
+        except requests.RequestException as exc:
+            logger.exception("orca_worker_request_failed filename=%s", filename)
             return JSONResponse(
-                status_code=400,
+                status_code=500,
                 content={
                     "success": False,
-                    "error": "SLICE_FAILED",
+                    "error": "ORCA_WORKER_UNREACHABLE",
                     "details": str(exc),
                     "filename": filename,
                 },
@@ -196,16 +239,10 @@ async def analyze_model(
                     "filename": filename,
                 },
             )
-        finally:
-            if tmp_path and os.path.exists(tmp_path):
-                try:
-                    os.unlink(tmp_path)
-                except Exception:
-                    pass
 
-    # -----------------------------
+    # ------------------------------------------------------------------
     # FAST MODE (EXISTING LOGIC)
-    # -----------------------------
+    # ------------------------------------------------------------------
     try:
         result = analyze_model_file_bytes(
             file_bytes=file_bytes,
