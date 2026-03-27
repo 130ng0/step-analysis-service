@@ -32,7 +32,7 @@ RUN apt-get update && apt-get install -y \
     libmspack0 \
     && rm -rf /var/lib/apt/lists/*
 
-RUN pip3 install --break-system-packages fastapi uvicorn python-multipart
+RUN pip3 install --break-system-packages fastapi uvicorn python-multipart trimesh numpy
 
 WORKDIR /opt/orca
 

@@ -10,10 +10,11 @@ import zipfile
 from pathlib import Path
 from typing import Dict, List, Literal
 
+import trimesh
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
 
-app = FastAPI(title="Orca Worker API", version="1.1.0")
+app = FastAPI(title="Orca Worker API", version="1.2.0")
 
 ORCA_PATH = "/opt/orca/squashfs-root/AppRun"
 TEMPLATE_DIR = "/workspace/templates"
@@ -141,46 +142,63 @@ def run_orca_slice(stl_path: str, material: str) -> Dict:
         if not os.path.exists(gcode_path):
             raise OrcaSliceError("plate_1.gcode was not generated")
 
-        parsed = parse_gcode(gcode_path)
-        return parsed
+        return parse_gcode(gcode_path)
 
 
-def inject_stl_into_3mf(three_mf_path: str, stl_path: str) -> None:
+def inject_stl_into_3mf(template_3mf_path: str, stl_path: str) -> None:
     """
-    Ersetzt in der 3MF genau die eine enthaltene STL (z.B. test.stl) durch die hochgeladene STL.
-    Dabei bleibt der Dateiname IN der 3MF gleich, damit Referenzen in der 3MF nicht kaputtgehen.
+    Ersetzt in der Template-3MF die Datei 3D/3dmodel.model
+    durch das Model aus der hochgeladenen STL.
     """
     temp_extract_dir = tempfile.mkdtemp(prefix="three_mf_extract_")
+    temp_generated_dir = tempfile.mkdtemp(prefix="generated_3mf_")
+
     try:
-        with zipfile.ZipFile(three_mf_path, "r") as zf:
+        # 1) Template entpacken
+        with zipfile.ZipFile(template_3mf_path, "r") as zf:
             zf.extractall(temp_extract_dir)
 
-        extracted = Path(temp_extract_dir)
+        extracted_template = Path(temp_extract_dir)
+        target_model = extracted_template / "3D" / "3dmodel.model"
 
-        # Suche nach genau einer STL innerhalb der 3MF
-        stl_files = list(extracted.rglob("*.stl"))
-        if not stl_files:
-            raise OrcaSliceError("No STL file found inside template 3MF")
-        if len(stl_files) != 1:
-            raise OrcaSliceError(f"Expected exactly 1 STL inside template 3MF, found {len(stl_files)}")
+        if not target_model.exists():
+            raise OrcaSliceError("Template 3MF does not contain 3D/3dmodel.model")
 
-        target_internal_stl = stl_files[0]
+        # 2) Aus STL temporär eine 3MF erzeugen
+        mesh = trimesh.load_mesh(stl_path, file_type="stl")
+        if mesh is None or mesh.is_empty:
+            raise OrcaSliceError("Uploaded STL could not be loaded")
 
-        # Hochgeladene STL an Stelle der Template-STL kopieren
-        shutil.copy2(stl_path, target_internal_stl)
+        generated_3mf = Path(temp_generated_dir) / "generated.3mf"
+        mesh.export(generated_3mf)
 
-        # 3MF neu packen
-        rebuilt_3mf = three_mf_path + ".rebuilt"
+        # 3) Temporäre 3MF entpacken und ihr 3dmodel.model übernehmen
+        generated_extract = Path(temp_generated_dir) / "unzipped"
+        generated_extract.mkdir(parents=True, exist_ok=True)
+
+        with zipfile.ZipFile(generated_3mf, "r") as zf:
+            zf.extractall(generated_extract)
+
+        generated_model = generated_extract / "3D" / "3dmodel.model"
+        if not generated_model.exists():
+            raise OrcaSliceError("Generated 3MF does not contain 3D/3dmodel.model")
+
+        # 4) Model im Template ersetzen
+        shutil.copy2(generated_model, target_model)
+
+        # 5) Template neu packen
+        rebuilt_3mf = template_3mf_path + ".rebuilt"
         with zipfile.ZipFile(rebuilt_3mf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-            for file_path in extracted.rglob("*"):
+            for file_path in extracted_template.rglob("*"):
                 if file_path.is_file():
-                    arcname = file_path.relative_to(extracted).as_posix()
+                    arcname = file_path.relative_to(extracted_template).as_posix()
                     zf.write(file_path, arcname)
 
-        os.replace(rebuilt_3mf, three_mf_path)
+        os.replace(rebuilt_3mf, template_3mf_path)
 
     finally:
         shutil.rmtree(temp_extract_dir, ignore_errors=True)
+        shutil.rmtree(temp_generated_dir, ignore_errors=True)
 
 
 def _split_csv_header_values(raw: str) -> List[str]:
