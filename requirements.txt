@@ -5,3 +5,4 @@ numpy==1.26.4
 cadquery==2.4.0
 trimesh==4.4.9
 pydantic~=2.12.5
+requests~=2.32.5
