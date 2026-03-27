@@ -23,7 +23,7 @@ from app.services.model_analysis import (
     add_support_estimate,
     analyze_model_file_bytes,
 )
-from orca_runner import OrcaSliceError, run_orca_slice
+from app.orca_runner import OrcaSliceError, run_orca_slice
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("step-analysis-service")
