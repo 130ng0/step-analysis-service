@@ -14,13 +14,13 @@ import trimesh
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
 
-app = FastAPI(title="Orca Worker API", version="1.2.0")
+app = FastAPI(title="Orca Worker API", version="1.3.0")
 
 ORCA_PATH = "/opt/orca/squashfs-root/AppRun"
 TEMPLATE_DIR = "/workspace/templates"
 FILAMENT_DIAMETER_MM_DEFAULT = 1.75
 
-TEMPLATE_MAP = {
+NO_SUPPORT_TEMPLATE_MAP = {
     "abs": "abs_template.3mf",
     "abs_cf": "abs-cf_template.3mf",
     "abs_esd": "abs-esd_template.3mf",
@@ -29,6 +29,17 @@ TEMPLATE_MAP = {
     "pc_cf": "pc-cf_template.3mf",
     "pc_fr": "pc-fr_template.3mf",
     "tpu": "tpu_template.3mf",
+}
+
+BREAKAWAY_TEMPLATE_MAP = {
+    "abs": "abs_breakaway_template.3mf",
+    "abs_cf": "abs-cf_breakaway_template.3mf",
+    "abs_esd": "abs-esd_breakaway_template.3mf",
+    "asa": "asa_breakaway_template.3mf",
+    "pc": "pc_breakaway_template.3mf",
+    "pc_cf": "pc-cf_breakaway_template.3mf",
+    "pc_fr": "pc-fr_breakaway_template.3mf",
+    "tpu": "tpu_breakaway_template.3mf",
 }
 
 
@@ -45,6 +56,7 @@ def health():
 async def slice_model(
     file: UploadFile = File(...),
     material_profile: Literal["abs", "abs_cf", "abs_esd", "asa", "pc", "pc_cf", "pc_fr", "tpu"] = Form(default="abs"),
+    support_material_type: Literal["none", "breakaway"] = Form(default="none"),
 ):
     filename = file.filename or "model.stl"
     suffix = os.path.splitext(filename)[1].lower()
@@ -62,13 +74,14 @@ async def slice_model(
             tmp.write(file_bytes)
             tmp_input = tmp.name
 
-        result = run_orca_slice(tmp_input, material_profile)
+        result = run_orca_slice(tmp_input, material_profile, support_material_type)
 
         return {
             "success": True,
             "filename": filename,
             "method": "slice",
             "material_profile": material_profile,
+            "support_material_type": support_material_type,
             **result,
         }
 
@@ -100,13 +113,25 @@ async def slice_model(
                 pass
 
 
-def run_orca_slice(stl_path: str, material: str) -> Dict:
-    if material not in TEMPLATE_MAP:
-        raise OrcaSliceError(f"Unsupported material profile: {material}")
+def resolve_template(material: str, support_material_type: str) -> str:
+    if support_material_type == "breakaway":
+        template_name = BREAKAWAY_TEMPLATE_MAP.get(material)
+        if not template_name:
+            raise OrcaSliceError(f"No breakaway template configured for material: {material}")
+    else:
+        template_name = NO_SUPPORT_TEMPLATE_MAP.get(material)
+        if not template_name:
+            raise OrcaSliceError(f"No template configured for material: {material}")
 
-    template_file = os.path.join(TEMPLATE_DIR, TEMPLATE_MAP[material])
+    template_file = os.path.join(TEMPLATE_DIR, template_name)
     if not os.path.exists(template_file):
         raise OrcaSliceError(f"Template not found: {template_file}")
+
+    return template_file
+
+
+def run_orca_slice(stl_path: str, material: str, support_material_type: str) -> Dict:
+    template_file = resolve_template(material, support_material_type)
 
     if not os.path.exists(stl_path):
         raise OrcaSliceError(f"STL not found: {stl_path}")
@@ -146,15 +171,10 @@ def run_orca_slice(stl_path: str, material: str) -> Dict:
 
 
 def inject_stl_into_3mf(template_3mf_path: str, stl_path: str) -> None:
-    """
-    Ersetzt in der Template-3MF die Datei 3D/3dmodel.model
-    durch das Model aus der hochgeladenen STL.
-    """
     temp_extract_dir = tempfile.mkdtemp(prefix="three_mf_extract_")
     temp_generated_dir = tempfile.mkdtemp(prefix="generated_3mf_")
 
     try:
-        # 1) Template entpacken
         with zipfile.ZipFile(template_3mf_path, "r") as zf:
             zf.extractall(temp_extract_dir)
 
@@ -164,7 +184,6 @@ def inject_stl_into_3mf(template_3mf_path: str, stl_path: str) -> None:
         if not target_model.exists():
             raise OrcaSliceError("Template 3MF does not contain 3D/3dmodel.model")
 
-        # 2) Aus STL temporär eine 3MF erzeugen
         mesh = trimesh.load_mesh(stl_path, file_type="stl")
         if mesh is None or mesh.is_empty:
             raise OrcaSliceError("Uploaded STL could not be loaded")
@@ -172,7 +191,6 @@ def inject_stl_into_3mf(template_3mf_path: str, stl_path: str) -> None:
         generated_3mf = Path(temp_generated_dir) / "generated.3mf"
         mesh.export(generated_3mf)
 
-        # 3) Temporäre 3MF entpacken und ihr 3dmodel.model übernehmen
         generated_extract = Path(temp_generated_dir) / "unzipped"
         generated_extract.mkdir(parents=True, exist_ok=True)
 
@@ -183,10 +201,8 @@ def inject_stl_into_3mf(template_3mf_path: str, stl_path: str) -> None:
         if not generated_model.exists():
             raise OrcaSliceError("Generated 3MF does not contain 3D/3dmodel.model")
 
-        # 4) Model im Template ersetzen
         shutil.copy2(generated_model, target_model)
 
-        # 5) Template neu packen
         rebuilt_3mf = template_3mf_path + ".rebuilt"
         with zipfile.ZipFile(rebuilt_3mf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
             for file_path in extracted_template.rglob("*"):

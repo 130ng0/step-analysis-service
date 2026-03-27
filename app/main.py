@@ -23,18 +23,20 @@ from app.services.model_analysis import (
     add_support_estimate,
     analyze_model_file_bytes,
 )
+from app.services.slice_input_converter import SliceInputConversionError, convert_upload_to_stl_bytes
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("step-analysis-service")
 
 app = FastAPI(
     title="3D Model Analysis Service",
-    version="2.1.0",
+    version="2.2.0",
     docs_url="/docs",
     redoc_url="/redoc",
 )
 
 ORCA_WORKER_URL = os.getenv("ORCA_WORKER_URL", "http://orca-worker:8090")
+ORCA_WORKER_TIMEOUT = int(os.getenv("ORCA_WORKER_TIMEOUT", "1800"))
 
 
 @app.middleware("http")
@@ -72,10 +74,7 @@ def health():
     worker_status = "unknown"
     try:
         r = requests.get(f"{ORCA_WORKER_URL}/health", timeout=5)
-        if r.ok:
-            worker_status = "ok"
-        else:
-            worker_status = f"error:{r.status_code}"
+        worker_status = "ok" if r.ok else f"error:{r.status_code}"
     except Exception:
         worker_status = "unreachable"
 
@@ -152,18 +151,25 @@ async def analyze_model(
     # ------------------------------------------------------------------
     if calculation_method == "slice":
         try:
+            stl_bytes, stl_filename = convert_upload_to_stl_bytes(file_bytes, filename)
+
             files = {
-                "file": (filename, file_bytes, "application/octet-stream"),
+                "file": (stl_filename, stl_bytes, "application/octet-stream"),
             }
+
+            # Aktuell: breakaway = Breakaway-Template, alles andere = No-Support-Template
+            worker_support_mode = "breakaway" if support_material_type == "breakaway" else "none"
+
             data = {
                 "material_profile": material_profile,
+                "support_material_type": worker_support_mode,
             }
 
             response = requests.post(
                 f"{ORCA_WORKER_URL}/slice",
                 files=files,
                 data=data,
-                timeout=300,
+                timeout=ORCA_WORKER_TIMEOUT,
             )
 
             try:
@@ -202,6 +208,7 @@ async def analyze_model(
                 "filename": filename,
                 "method": "slice",
                 "material_profile": material_profile,
+                "support_material_type": worker_support_mode,
                 "unit": unit,
                 "machine_hour_rate_eur": machine_hour_rate_eur,
                 "margin_factor": margin_factor,
@@ -217,6 +224,16 @@ async def analyze_model(
                 "tools": payload.get("tools", []),
             }
 
+        except SliceInputConversionError as exc:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "success": False,
+                    "error": "SLICE_INPUT_CONVERSION_FAILED",
+                    "details": str(exc),
+                    "filename": filename,
+                },
+            )
         except requests.RequestException as exc:
             logger.exception("orca_worker_request_failed filename=%s", filename)
             return JSONResponse(
