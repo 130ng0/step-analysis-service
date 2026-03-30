@@ -1,0 +1,26 @@
+{
+  "compatible_printers": [
+    "EL-140V3 v.2.0"
+  ],
+  "compatible_prints": [
+    "TPU v.1.1 (REVO) 0.4mm"
+  ],
+  "filament_settings_id": [
+    "TPU v.1.1 (REVO) 0.4mm"
+  ],
+  "from": "User",
+  "hot_plate_temp": [
+    "85"
+  ],
+  "inherits": "eSUN PLA+ @System",
+  "is_custom_defined": "0",
+  "name": "TPU v.1.1 (REVO) 0.4mm",
+  "version": "2.3.0.4",
+  "compatible_printer_model": [
+    "Generic Marlin Printer"
+  ],
+  "supported_nozzle_diameters": [
+    "0.4",
+    "0.4"
+  ]
+}
