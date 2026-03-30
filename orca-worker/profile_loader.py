@@ -91,6 +91,10 @@ def patch_printer(printer: dict[str, Any], printer_name: str) -> dict[str, Any]:
     patched["name"] = printer_name
     patched["from"] = "User"
     patched["type"] = "machine"
+
+    # Sicherheitshalber auch printer_settings_id konsistent halten
+    patched["printer_settings_id"] = printer_name
+
     return patched
 
 
@@ -100,9 +104,16 @@ def patch_process(process: dict[str, Any], printer: dict[str, Any], process_name
     printer_name = printer.get("name")
     printer_model = printer.get("printer_model")
     nozzle = printer.get("nozzle_diameter")
+    printer_settings_id = printer.get("printer_settings_id")
 
+    # Kompatibilität explizit auf euren Drucker ziehen
     if printer_name:
         patched["compatible_printers"] = [printer_name]
+
+    # Falls Orca eher über printer_settings_id matched, das ebenfalls setzen
+    if printer_settings_id:
+        patched["compatible_printers"] = [printer_name]
+
     if printer_model:
         patched["compatible_printer_model"] = [printer_model]
 
@@ -110,17 +121,20 @@ def patch_process(process: dict[str, Any], printer: dict[str, Any], process_name
     patched["from"] = "User"
     patched["type"] = "process"
 
+    patched.pop("compatible_printers_condition", None)
+    patched.pop("compatible_prints_condition", None)
+
     if nozzle is not None:
         if isinstance(nozzle, list):
-            patched["supported_nozzle_diameters"] = nozzle
+            patched["supported_nozzle_diameters"] = [str(x) for x in nozzle]
         else:
             patched["supported_nozzle_diameters"] = [str(nozzle)]
 
-    # Nur diese Overrides wollen wir bewusst extern setzen
+    # WICHTIG: Orca erwartet hier Strings
     patched["sparse_infill_density"] = f"{int(round(float(overrides['infill_percent'])))}%"
-    patched["wall_loops"] = int(overrides["perimeter_count"])
-    patched["top_shell_layers"] = int(overrides["top_layers"])
-    patched["bottom_shell_layers"] = int(overrides["bottom_layers"])
+    patched["wall_loops"] = str(int(overrides["perimeter_count"]))
+    patched["top_shell_layers"] = str(int(overrides["top_layers"]))
+    patched["bottom_shell_layers"] = str(int(overrides["bottom_layers"]))
 
     return patched
 
@@ -141,9 +155,12 @@ def patch_filament(filament: dict[str, Any], printer: dict[str, Any], filament_n
     patched["from"] = "User"
     patched["type"] = "filament"
 
+    patched.pop("compatible_printers_condition", None)
+    patched.pop("compatible_prints_condition", None)
+
     if nozzle is not None:
         if isinstance(nozzle, list):
-            patched["supported_nozzle_diameters"] = nozzle
+            patched["supported_nozzle_diameters"] = [str(x) for x in nozzle]
         else:
             patched["supported_nozzle_diameters"] = [str(nozzle)]
 
