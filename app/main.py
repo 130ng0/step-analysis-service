@@ -13,16 +13,6 @@ from fastapi.responses import JSONResponse
 from app.config import ALLOWED_EXTENSIONS, MAX_FILE_SIZE_BYTES
 from app.schemas import ErrorResponse
 from app.security import verify_api_key
-from app.services.model_analysis import (
-    ModelAnalysisError,
-    UnsupportedFileFormatError,
-    add_extrusion_estimate,
-    add_material_estimate,
-    add_price_estimate,
-    add_runtime_estimate,
-    add_support_estimate,
-    analyze_model_file_bytes,
-)
 from app.services.slice_input_converter import SliceInputConversionError, convert_upload_to_stl_bytes
 
 logging.basicConfig(level=logging.INFO)
@@ -30,7 +20,7 @@ logger = logging.getLogger("step-analysis-service")
 
 app = FastAPI(
     title="3D Model Analysis Service",
-    version="2.4.0",
+    version="2.5.0",
     docs_url="/docs",
     redoc_url="/redoc",
 )
@@ -92,33 +82,14 @@ def health():
 )
 async def analyze_model(
     file: UploadFile = File(...),
-    calculation_method: Literal["slice", "fast"] = Form(default="slice"),
     material_profile: Literal["abs", "abs_cf", "abs_esd", "asa", "pc", "pc_cf", "pc_fr", "tpu"] = Form(default="abs"),
-    machine_hour_rate_eur: float | None = Form(default=8.0),
-    margin_factor: float | None = Form(default=1.0),
-
-    # Nur diese Slicer-Overrides bleiben für slice relevant
+    support_material_type: Literal["none", "breakaway"] = Form(default="breakaway"),
     infill_percent: float = Form(default=20.0),
     perimeter_count: int = Form(default=5),
     top_layers: int = Form(default=5),
     bottom_layers: int = Form(default=5),
-
-    # Support: aktuell nur breakaway oder none
-    support_material_type: Literal["none", "breakaway", "hips", "soluble"] = Form(default="breakaway"),
-
-    # FAST mode legacy defaults
-    unit: str = Form(default="mm"),
-    volumetric_flow_mm3_s: float | None = Form(default=15.0),
-    support_angle_deg: float | None = Form(default=45.0),
-    support_density_factor: float | None = Form(default=0.22),
-    orientation_mode: Literal["auto", "fixed"] = Form(default="auto"),
-    line_width_mm: float = Form(default=0.45),
-    layer_height_mm: float = Form(default=0.20),
-    part_material_name: str = Form(default="ABS"),
-    part_material_price_per_kg_eur: float | None = Form(default=28.0),
-    part_material_density_g_cm3: float | None = Form(default=1.04),
-    support_material_price_per_kg_eur: str | None = Form(default=None),
-    support_material_density_g_cm3: str | None = Form(default=None),
+    machine_hour_rate_eur: float = Form(default=8.0),
+    margin_factor: float = Form(default=1.0),
 ):
     filename = file.filename or "model.step"
 
@@ -149,193 +120,107 @@ async def analyze_model(
             },
         )
 
-    if calculation_method == "slice":
+    try:
+        stl_bytes, stl_filename = convert_upload_to_stl_bytes(file_bytes, filename)
+
+        # Aktuell: nur breakaway oder kein support
+        worker_support_mode = "breakaway" if support_material_type == "breakaway" else "none"
+
+        files = {
+            "file": (stl_filename, stl_bytes, "application/octet-stream"),
+        }
+        data = {
+            "material_profile": material_profile,
+            "support_material_type": worker_support_mode,
+            "infill_percent": str(infill_percent),
+            "perimeter_count": str(perimeter_count),
+            "top_layers": str(top_layers),
+            "bottom_layers": str(bottom_layers),
+        }
+
+        response = requests.post(
+            f"{ORCA_WORKER_URL}/slice",
+            files=files,
+            data=data,
+            timeout=ORCA_WORKER_TIMEOUT,
+        )
+
         try:
-            stl_bytes, stl_filename = convert_upload_to_stl_bytes(file_bytes, filename)
-
-            worker_support_mode = "breakaway" if support_material_type == "breakaway" else "none"
-
-            files = {
-                "file": (stl_filename, stl_bytes, "application/octet-stream"),
-            }
-            data = {
-                "material_profile": material_profile,
-                "support_material_type": worker_support_mode,
-                "infill_percent": str(infill_percent),
-                "perimeter_count": str(perimeter_count),
-                "top_layers": str(top_layers),
-                "bottom_layers": str(bottom_layers),
-            }
-
-            response = requests.post(
-                f"{ORCA_WORKER_URL}/slice",
-                files=files,
-                data=data,
-                timeout=ORCA_WORKER_TIMEOUT,
-            )
-
-            try:
-                payload = response.json()
-            except Exception:
-                payload = {
-                    "success": False,
-                    "error": "INVALID_WORKER_RESPONSE",
-                    "details": response.text,
-                    "filename": filename,
-                }
-
-            if response.status_code >= 400 or not payload.get("success"):
-                return JSONResponse(
-                    status_code=400,
-                    content={
-                        "success": False,
-                        "error": "SLICE_FAILED",
-                        "details": payload.get("details") or payload.get("error") or "Unknown Orca worker error",
-                        "filename": filename,
-                    },
-                )
-
-            print_time_hours = float(payload.get("print_time_hours") or 0.0)
-            material_cost_eur_total = float(payload.get("material_cost_eur_total") or 0.0)
-            filament_weight_g_total = float(payload.get("filament_weight_g_total") or 0.0)
-            filament_volume_cm3_total = float(payload.get("filament_volume_cm3_total") or 0.0)
-            filament_length_mm_total = float(payload.get("filament_length_mm_total") or 0.0)
-
-            machine_cost_eur = round(print_time_hours * float(machine_hour_rate_eur or 0.0), 2)
-            subtotal_cost_eur = round(machine_cost_eur + material_cost_eur_total, 2)
-            total_price_eur = round(subtotal_cost_eur * float(margin_factor or 1.0), 2)
-
-            return {
-                "success": True,
+            payload = response.json()
+        except Exception:
+            payload = {
+                "success": False,
+                "error": "INVALID_WORKER_RESPONSE",
+                "details": response.text,
                 "filename": filename,
-                "method": "slice",
-                "material_profile": material_profile,
-                "support_material_type": worker_support_mode,
-                "unit": "mm",
-                "machine_hour_rate_eur": machine_hour_rate_eur,
-                "margin_factor": margin_factor,
-                "print_time_minutes": payload.get("print_time_minutes", 0),
-                "print_time_hours": print_time_hours,
-                "filament_length_mm_total": round(filament_length_mm_total, 3),
-                "filament_volume_cm3_total": round(filament_volume_cm3_total, 3),
-                "filament_weight_g_total": round(filament_weight_g_total, 3),
-                "material_cost_eur_total": round(material_cost_eur_total, 2),
-                "machine_cost_eur": machine_cost_eur,
-                "subtotal_cost_eur": subtotal_cost_eur,
-                "total_price_eur": total_price_eur,
-                "applied_slicer_settings": payload.get("applied_slicer_settings", {}),
-                "tools": payload.get("tools", []),
             }
 
-        except SliceInputConversionError as exc:
+        if response.status_code >= 400 or not payload.get("success"):
             return JSONResponse(
                 status_code=400,
                 content={
                     "success": False,
-                    "error": "SLICE_INPUT_CONVERSION_FAILED",
-                    "details": str(exc),
-                    "filename": filename,
-                },
-            )
-        except requests.RequestException as exc:
-            logger.exception("orca_worker_request_failed filename=%s", filename)
-            return JSONResponse(
-                status_code=500,
-                content={
-                    "success": False,
-                    "error": "ORCA_WORKER_UNREACHABLE",
-                    "details": str(exc),
-                    "filename": filename,
-                },
-            )
-        except Exception as exc:
-            logger.exception("slice_mode_unexpected_error filename=%s", filename)
-            return JSONResponse(
-                status_code=500,
-                content={
-                    "success": False,
-                    "error": "INTERNAL_SERVER_ERROR",
-                    "details": str(exc),
+                    "error": "SLICE_FAILED",
+                    "details": payload.get("details") or payload.get("error") or "Unknown Orca worker error",
                     "filename": filename,
                 },
             )
 
-    # Fast mode bleibt wie bisher
-    try:
-        if unit not in {"mm", "cm", "m"}:
-            raise HTTPException(status_code=400, detail="unit must be one of: mm, cm, m")
+        print_time_hours = float(payload.get("print_time_hours") or 0.0)
+        material_cost_eur_total = float(payload.get("material_cost_eur_total") or 0.0)
+        filament_weight_g_total = float(payload.get("filament_weight_g_total") or 0.0)
+        filament_volume_cm3_total = float(payload.get("filament_volume_cm3_total") or 0.0)
+        filament_length_mm_total = float(payload.get("filament_length_mm_total") or 0.0)
 
-        result = analyze_model_file_bytes(
-            file_bytes=file_bytes,
-            filename=filename,
-            unit=unit,
-        )
-        result = add_support_estimate(
-            result=result,
-            file_bytes=file_bytes,
-            filename=filename,
-            support_angle_deg=support_angle_deg,
-            support_density_factor=support_density_factor,
-            support_material_type=support_material_type,
-            orientation_mode=orientation_mode,
-        )
-        result = add_extrusion_estimate(
-            result=result,
-            infill_percent=infill_percent,
-            perimeter_count=perimeter_count,
-            top_layers=top_layers,
-            bottom_layers=bottom_layers,
-            line_width_mm=line_width_mm,
-            layer_height_mm=layer_height_mm,
-            support_material_type=support_material_type,
-        )
-        result = add_runtime_estimate(
-            result=result,
-            machine_hour_rate_eur=machine_hour_rate_eur,
-            volumetric_flow_mm3_s=volumetric_flow_mm3_s,
-            support_material_type=support_material_type,
-        )
-        result = add_material_estimate(
-            result=result,
-            part_material_name=part_material_name,
-            part_material_price_per_kg_eur=part_material_price_per_kg_eur,
-            part_material_density_g_cm3=part_material_density_g_cm3,
-            support_material_type=support_material_type,
-            support_material_price_per_kg_eur=support_material_price_per_kg_eur,
-            support_material_density_g_cm3=support_material_density_g_cm3,
-        )
-        result = add_price_estimate(
-            result=result,
-            margin_factor=margin_factor,
-        )
-        result["method"] = "fast"
-        result["material_profile"] = material_profile
-        return result
+        machine_cost_eur = round(print_time_hours * machine_hour_rate_eur, 2)
+        subtotal_cost_eur = round(machine_cost_eur + material_cost_eur_total, 2)
+        total_price_eur = round(subtotal_cost_eur * margin_factor, 2)
 
-    except UnsupportedFileFormatError as exc:
+        return {
+            "success": True,
+            "filename": filename,
+            "method": "slice",
+            "material_profile": material_profile,
+            "support_material_type": worker_support_mode,
+            "unit": "mm",
+            "machine_hour_rate_eur": machine_hour_rate_eur,
+            "margin_factor": margin_factor,
+            "print_time_minutes": payload.get("print_time_minutes", 0),
+            "print_time_hours": print_time_hours,
+            "filament_length_mm_total": round(filament_length_mm_total, 3),
+            "filament_volume_cm3_total": round(filament_volume_cm3_total, 3),
+            "filament_weight_g_total": round(filament_weight_g_total, 3),
+            "material_cost_eur_total": round(material_cost_eur_total, 2),
+            "machine_cost_eur": machine_cost_eur,
+            "subtotal_cost_eur": subtotal_cost_eur,
+            "total_price_eur": total_price_eur,
+            "applied_slicer_settings": payload.get("applied_slicer_settings", {}),
+            "tools": payload.get("tools", []),
+        }
+
+    except SliceInputConversionError as exc:
         return JSONResponse(
             status_code=400,
             content={
                 "success": False,
-                "error": "UNSUPPORTED_FILE_FORMAT",
+                "error": "SLICE_INPUT_CONVERSION_FAILED",
                 "details": str(exc),
                 "filename": filename,
             },
         )
-    except ModelAnalysisError as exc:
+    except requests.RequestException as exc:
+        logger.exception("orca_worker_request_failed filename=%s", filename)
         return JSONResponse(
-            status_code=400,
+            status_code=500,
             content={
                 "success": False,
-                "error": "MODEL_ANALYSIS_FAILED",
+                "error": "ORCA_WORKER_UNREACHABLE",
                 "details": str(exc),
                 "filename": filename,
             },
         )
-    except HTTPException:
-        raise
     except Exception as exc:
-        logger.exception("unexpected_error filename=%s", filename)
+        logger.exception("slice_mode_unexpected_error filename=%s", filename)
         return JSONResponse(
             status_code=500,
             content={
