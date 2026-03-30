@@ -169,6 +169,22 @@ def run_orca_with_profiles(
         process_path.write_text(json.dumps(process, indent=2, ensure_ascii=False), encoding="utf-8")
         filament_path.write_text(json.dumps(filament, indent=2, ensure_ascii=False), encoding="utf-8")
 
+        debug_dir = Path("/workspace/debug-last")
+        debug_dir.mkdir(parents=True, exist_ok=True)
+
+        (debug_dir / "printer.json").write_text(
+            json.dumps(printer, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        (debug_dir / "process.json").write_text(
+            json.dumps(process, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        (debug_dir / "filament.json").write_text(
+            json.dumps(filament, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+
         cmd = [
             ORCA_PATH,
             "--load-settings", f"{printer_path};{process_path}",
