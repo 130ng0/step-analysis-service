@@ -86,14 +86,16 @@ def cleanup_profile(data: dict[str, Any], profile_kind: str, original_name: str)
     return cleaned
 
 
-def patch_printer(printer: dict[str, Any], printer_name: str) -> dict[str, Any]:
+def patch_printer(printer: dict[str, Any], printer_name: str, process_name: str, filament_name: str) -> dict[str, Any]:
     patched = dict(printer)
     patched["name"] = printer_name
     patched["from"] = "User"
     patched["type"] = "machine"
-
-    # Sicherheitshalber auch printer_settings_id konsistent halten
     patched["printer_settings_id"] = printer_name
+
+    # zusätzliche Bindungen
+    patched["default_print_profile"] = process_name
+    patched["default_filament_profile"] = [filament_name]
 
     return patched
 
@@ -106,16 +108,15 @@ def patch_process(process: dict[str, Any], printer: dict[str, Any], process_name
     nozzle = printer.get("nozzle_diameter")
     printer_settings_id = printer.get("printer_settings_id")
 
-    # Kompatibilität explizit auf euren Drucker ziehen
     if printer_name:
         patched["compatible_printers"] = [printer_name]
-
-    # Falls Orca eher über printer_settings_id matched, das ebenfalls setzen
-    if printer_settings_id:
-        patched["compatible_printers"] = [printer_name]
+        patched["print_compatible_printers"] = [printer_name]
 
     if printer_model:
         patched["compatible_printer_model"] = [printer_model]
+
+    if printer_settings_id:
+        patched["printer_settings_id"] = printer_settings_id
 
     patched["name"] = process_name
     patched["from"] = "User"
@@ -130,7 +131,6 @@ def patch_process(process: dict[str, Any], printer: dict[str, Any], process_name
         else:
             patched["supported_nozzle_diameters"] = [str(nozzle)]
 
-    # WICHTIG: Orca erwartet hier Strings
     patched["sparse_infill_density"] = f"{int(round(float(overrides['infill_percent'])))}%"
     patched["wall_loops"] = str(int(overrides["perimeter_count"]))
     patched["top_shell_layers"] = str(int(overrides["top_layers"]))
@@ -148,6 +148,7 @@ def patch_filament(filament: dict[str, Any], printer: dict[str, Any], filament_n
 
     if printer_name:
         patched["compatible_printers"] = [printer_name]
+
     if printer_model:
         patched["compatible_printer_model"] = [printer_model]
 
@@ -183,7 +184,7 @@ def build_resolved_profiles(
     process = cleanup_profile(process, "process", process_profile_name)
     filament = cleanup_profile(filament, "filament", filament_profile_name)
 
-    printer = patch_printer(printer, machine_profile_name)
+    printer = patch_printer(printer, machine_profile_name, process_profile_name, filament_profile_name)
     process = patch_process(process, printer, process_profile_name, overrides)
     filament = patch_filament(filament, printer, filament_profile_name)
 
