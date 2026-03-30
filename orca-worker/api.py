@@ -14,7 +14,7 @@ import trimesh
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
 
-app = FastAPI(title="Orca Worker API", version="1.3.0")
+app = FastAPI(title="Orca Worker API", version="1.5.0")
 
 ORCA_PATH = "/opt/orca/squashfs-root/AppRun"
 TEMPLATE_DIR = "/workspace/templates"
@@ -57,6 +57,10 @@ async def slice_model(
     file: UploadFile = File(...),
     material_profile: Literal["abs", "abs_cf", "abs_esd", "asa", "pc", "pc_cf", "pc_fr", "tpu"] = Form(default="abs"),
     support_material_type: Literal["none", "breakaway"] = Form(default="none"),
+    infill_percent: float = Form(default=20.0),
+    perimeter_count: int = Form(default=5),
+    top_layers: int = Form(default=5),
+    bottom_layers: int = Form(default=5),
 ):
     filename = file.filename or "model.stl"
     suffix = os.path.splitext(filename)[1].lower()
@@ -74,7 +78,14 @@ async def slice_model(
             tmp.write(file_bytes)
             tmp_input = tmp.name
 
-        result = run_orca_slice(tmp_input, material_profile, support_material_type)
+        slicer_overrides = {
+            "infill_percent": infill_percent,
+            "perimeter_count": perimeter_count,
+            "top_layers": top_layers,
+            "bottom_layers": bottom_layers,
+        }
+
+        result = run_orca_slice(tmp_input, material_profile, support_material_type, slicer_overrides)
 
         return {
             "success": True,
@@ -82,6 +93,7 @@ async def slice_model(
             "method": "slice",
             "material_profile": material_profile,
             "support_material_type": support_material_type,
+            "applied_slicer_settings": slicer_overrides,
             **result,
         }
 
@@ -130,7 +142,7 @@ def resolve_template(material: str, support_material_type: str) -> str:
     return template_file
 
 
-def run_orca_slice(stl_path: str, material: str, support_material_type: str) -> Dict:
+def run_orca_slice(stl_path: str, material: str, support_material_type: str, slicer_overrides: Dict) -> Dict:
     template_file = resolve_template(material, support_material_type)
 
     if not os.path.exists(stl_path):
@@ -144,6 +156,7 @@ def run_orca_slice(stl_path: str, material: str, support_material_type: str) -> 
         shutil.copy2(template_file, work_3mf)
 
         inject_stl_into_3mf(work_3mf, stl_path)
+        patch_project_settings_in_3mf(work_3mf, slicer_overrides)
 
         cmd = [
             ORCA_PATH,
@@ -215,6 +228,52 @@ def inject_stl_into_3mf(template_3mf_path: str, stl_path: str) -> None:
     finally:
         shutil.rmtree(temp_extract_dir, ignore_errors=True)
         shutil.rmtree(temp_generated_dir, ignore_errors=True)
+
+
+def patch_project_settings_in_3mf(template_3mf_path: str, overrides: Dict) -> None:
+    temp_extract_dir = tempfile.mkdtemp(prefix="three_mf_patch_")
+
+    try:
+        with zipfile.ZipFile(template_3mf_path, "r") as zf:
+            zf.extractall(temp_extract_dir)
+
+        extracted = Path(temp_extract_dir)
+        project_config = extracted / "Metadata" / "project_settings.config"
+
+        if not project_config.exists():
+            raise OrcaSliceError("Template 3MF does not contain Metadata/project_settings.config")
+
+        text = project_config.read_text(encoding="utf-8", errors="ignore")
+
+        def replace_setting(content: str, key: str, value: str) -> str:
+            pattern = re.compile(rf"(^\s*{re.escape(key)}\s*=\s*).*$", re.MULTILINE)
+            if pattern.search(content):
+                return pattern.sub(rf"\1{value}", content)
+            return content + f"\n{key} = {value}\n"
+
+        infill_percent = float(overrides["infill_percent"])
+        perimeter_count = int(overrides["perimeter_count"])
+        top_layers = int(overrides["top_layers"])
+        bottom_layers = int(overrides["bottom_layers"])
+
+        text = replace_setting(text, "sparse_infill_density", f"{int(round(infill_percent))}%")
+        text = replace_setting(text, "wall_loops", str(perimeter_count))
+        text = replace_setting(text, "top_shell_layers", str(top_layers))
+        text = replace_setting(text, "bottom_shell_layers", str(bottom_layers))
+
+        project_config.write_text(text, encoding="utf-8")
+
+        rebuilt_3mf = template_3mf_path + ".patched"
+        with zipfile.ZipFile(rebuilt_3mf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            for file_path in extracted.rglob("*"):
+                if file_path.is_file():
+                    arcname = file_path.relative_to(extracted).as_posix()
+                    zf.write(file_path, arcname)
+
+        os.replace(rebuilt_3mf, template_3mf_path)
+
+    finally:
+        shutil.rmtree(temp_extract_dir, ignore_errors=True)
 
 
 def _split_csv_header_values(raw: str) -> List[str]:

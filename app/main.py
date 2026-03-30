@@ -30,7 +30,7 @@ logger = logging.getLogger("step-analysis-service")
 
 app = FastAPI(
     title="3D Model Analysis Service",
-    version="2.2.0",
+    version="2.4.0",
     docs_url="/docs",
     redoc_url="/redoc",
 )
@@ -94,30 +94,33 @@ async def analyze_model(
     file: UploadFile = File(...),
     calculation_method: Literal["slice", "fast"] = Form(default="slice"),
     material_profile: Literal["abs", "abs_cf", "abs_esd", "asa", "pc", "pc_cf", "pc_fr", "tpu"] = Form(default="abs"),
-    unit: str = Form(default="mm"),
     machine_hour_rate_eur: float | None = Form(default=8.0),
-    volumetric_flow_mm3_s: float | None = Form(default=15.0),
-    support_angle_deg: float | None = Form(default=45.0),
-    support_density_factor: float | None = Form(default=0.22),
-    orientation_mode: Literal["auto", "fixed"] = Form(default="auto"),
+    margin_factor: float | None = Form(default=1.0),
+
+    # Nur diese Slicer-Overrides bleiben für slice relevant
     infill_percent: float = Form(default=20.0),
     perimeter_count: int = Form(default=5),
     top_layers: int = Form(default=5),
     bottom_layers: int = Form(default=5),
+
+    # Support: aktuell nur breakaway oder none
+    support_material_type: Literal["none", "breakaway", "hips", "soluble"] = Form(default="breakaway"),
+
+    # FAST mode legacy defaults
+    unit: str = Form(default="mm"),
+    volumetric_flow_mm3_s: float | None = Form(default=15.0),
+    support_angle_deg: float | None = Form(default=45.0),
+    support_density_factor: float | None = Form(default=0.22),
+    orientation_mode: Literal["auto", "fixed"] = Form(default="auto"),
     line_width_mm: float = Form(default=0.45),
     layer_height_mm: float = Form(default=0.20),
     part_material_name: str = Form(default="ABS"),
     part_material_price_per_kg_eur: float | None = Form(default=28.0),
     part_material_density_g_cm3: float | None = Form(default=1.04),
-    support_material_type: Literal["none", "breakaway", "hips", "soluble"] = Form(default="breakaway"),
     support_material_price_per_kg_eur: str | None = Form(default=None),
     support_material_density_g_cm3: str | None = Form(default=None),
-    margin_factor: float | None = Form(default=1.0),
 ):
     filename = file.filename or "model.step"
-
-    if unit not in {"mm", "cm", "m"}:
-        raise HTTPException(status_code=400, detail="unit must be one of: mm, cm, m")
 
     if not filename.lower().endswith(ALLOWED_EXTENSIONS):
         return JSONResponse(
@@ -146,23 +149,22 @@ async def analyze_model(
             },
         )
 
-    # ------------------------------------------------------------------
-    # SLICE MODE (DEFAULT)
-    # ------------------------------------------------------------------
     if calculation_method == "slice":
         try:
             stl_bytes, stl_filename = convert_upload_to_stl_bytes(file_bytes, filename)
 
+            worker_support_mode = "breakaway" if support_material_type == "breakaway" else "none"
+
             files = {
                 "file": (stl_filename, stl_bytes, "application/octet-stream"),
             }
-
-            # Aktuell: breakaway = Breakaway-Template, alles andere = No-Support-Template
-            worker_support_mode = "breakaway" if support_material_type == "breakaway" else "none"
-
             data = {
                 "material_profile": material_profile,
                 "support_material_type": worker_support_mode,
+                "infill_percent": str(infill_percent),
+                "perimeter_count": str(perimeter_count),
+                "top_layers": str(top_layers),
+                "bottom_layers": str(bottom_layers),
             }
 
             response = requests.post(
@@ -209,7 +211,7 @@ async def analyze_model(
                 "method": "slice",
                 "material_profile": material_profile,
                 "support_material_type": worker_support_mode,
-                "unit": unit,
+                "unit": "mm",
                 "machine_hour_rate_eur": machine_hour_rate_eur,
                 "margin_factor": margin_factor,
                 "print_time_minutes": payload.get("print_time_minutes", 0),
@@ -221,6 +223,7 @@ async def analyze_model(
                 "machine_cost_eur": machine_cost_eur,
                 "subtotal_cost_eur": subtotal_cost_eur,
                 "total_price_eur": total_price_eur,
+                "applied_slicer_settings": payload.get("applied_slicer_settings", {}),
                 "tools": payload.get("tools", []),
             }
 
@@ -257,10 +260,11 @@ async def analyze_model(
                 },
             )
 
-    # ------------------------------------------------------------------
-    # FAST MODE (EXISTING LOGIC)
-    # ------------------------------------------------------------------
+    # Fast mode bleibt wie bisher
     try:
+        if unit not in {"mm", "cm", "m"}:
+            raise HTTPException(status_code=400, detail="unit must be one of: mm, cm, m")
+
         result = analyze_model_file_bytes(
             file_bytes=file_bytes,
             filename=filename,
