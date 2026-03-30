@@ -1,50 +1,63 @@
 from __future__ import annotations
 
+import json
 import math
 import os
 import re
-import shutil
 import subprocess
 import tempfile
-import zipfile
 from pathlib import Path
 from typing import Dict, List, Literal
 
-import trimesh
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
 
-app = FastAPI(title="Orca Worker API", version="1.5.0")
+from profile_loader import ProfileResolutionError, build_resolved_profiles
+
+app = FastAPI(title="Orca Worker API", version="2.0.0")
 
 ORCA_PATH = "/opt/orca/squashfs-root/AppRun"
-TEMPLATE_DIR = "/workspace/templates"
 FILAMENT_DIAMETER_MM_DEFAULT = 1.75
-
-NO_SUPPORT_TEMPLATE_MAP = {
-    "abs": "abs_template.3mf",
-    "abs_cf": "abs-cf_template.3mf",
-    "abs_esd": "abs-esd_template.3mf",
-    "asa": "asa_template.3mf",
-    "pc": "pc_template.3mf",
-    "pc_cf": "pc-cf_template.3mf",
-    "pc_fr": "pc-fr_template.3mf",
-    "tpu": "tpu_template.3mf",
-}
-
-BREAKAWAY_TEMPLATE_MAP = {
-    "abs": "abs_breakaway_template.3mf",
-    "abs_cf": "abs-cf_breakaway_template.3mf",
-    "abs_esd": "abs-esd_breakaway_template.3mf",
-    "asa": "asa_breakaway_template.3mf",
-    "pc": "pc_breakaway_template.3mf",
-    "pc_cf": "pc-cf_breakaway_template.3mf",
-    "pc_fr": "pc-fr_breakaway_template.3mf",
-    "tpu": "tpu_breakaway_template.3mf",
-}
 
 
 class OrcaSliceError(Exception):
     pass
+
+
+def select_profile_set(material_profile: str, support_material_type: str) -> dict[str, str]:
+    # breakaway verwendet laut deiner Vorgabe aktuell auch das Standard-Prozessprofil
+    if material_profile == "tpu":
+        return {
+            "machine": "EL-140V3 v.2.0",
+            "process": "TPU 0.4mm v2.0",
+            "filament": "TPU v.1.1 (REVO) 0.4mm",
+        }
+
+    if material_profile == "pc_fr":
+        return {
+            "machine": "EL-140V3 v.2.0",
+            "process": "Standard 0.4mm v2.0",
+            "filament": "PC-FR_Ensinger",
+        }
+
+    filament_map = {
+        "abs": "ABS PRO 0.6mm v2.0",
+        "abs_cf": "ABS-CF PRO 0.6mm 2.0",
+        "abs_esd": "ABS-ESD PRO 0.6mm v2.0",
+        "asa": "ASA PRO 0.6mm v2.0",
+        "pc": "PC PRO 0.6mm v2.0",
+        "pc_cf": "PC-CF PRO 0.6mm v2.0",
+    }
+
+    filament_name = filament_map.get(material_profile)
+    if not filament_name:
+        raise OrcaSliceError(f"No filament mapping configured for material: {material_profile}")
+
+    return {
+        "machine": "EL-140V3 v.2.0 0.6mm",
+        "process": "Standard 0.6mm v2.0",
+        "filament": filament_name,
+    }
 
 
 @app.get("/health")
@@ -78,14 +91,19 @@ async def slice_model(
             tmp.write(file_bytes)
             tmp_input = tmp.name
 
-        slicer_overrides = {
+        overrides = {
             "infill_percent": infill_percent,
             "perimeter_count": perimeter_count,
             "top_layers": top_layers,
             "bottom_layers": bottom_layers,
         }
 
-        result = run_orca_slice(tmp_input, material_profile, support_material_type, slicer_overrides)
+        result = run_orca_with_profiles(
+            stl_path=tmp_input,
+            material_profile=material_profile,
+            support_material_type=support_material_type,
+            overrides=overrides,
+        )
 
         return {
             "success": True,
@@ -93,11 +111,11 @@ async def slice_model(
             "method": "slice",
             "material_profile": material_profile,
             "support_material_type": support_material_type,
-            "applied_slicer_settings": slicer_overrides,
+            "applied_slicer_settings": overrides,
             **result,
         }
 
-    except OrcaSliceError as exc:
+    except (OrcaSliceError, ProfileResolutionError) as exc:
         return JSONResponse(
             status_code=400,
             content={
@@ -125,44 +143,39 @@ async def slice_model(
                 pass
 
 
-def resolve_template(material: str, support_material_type: str) -> str:
-    if support_material_type == "breakaway":
-        template_name = BREAKAWAY_TEMPLATE_MAP.get(material)
-        if not template_name:
-            raise OrcaSliceError(f"No breakaway template configured for material: {material}")
-    else:
-        template_name = NO_SUPPORT_TEMPLATE_MAP.get(material)
-        if not template_name:
-            raise OrcaSliceError(f"No template configured for material: {material}")
-
-    template_file = os.path.join(TEMPLATE_DIR, template_name)
-    if not os.path.exists(template_file):
-        raise OrcaSliceError(f"Template not found: {template_file}")
-
-    return template_file
-
-
-def run_orca_slice(stl_path: str, material: str, support_material_type: str, slicer_overrides: Dict) -> Dict:
-    template_file = resolve_template(material, support_material_type)
-
-    if not os.path.exists(stl_path):
-        raise OrcaSliceError(f"STL not found: {stl_path}")
+def run_orca_with_profiles(
+    stl_path: str,
+    material_profile: str,
+    support_material_type: str,
+    overrides: dict[str, float | int],
+) -> Dict:
+    selected = select_profile_set(material_profile, support_material_type)
 
     with tempfile.TemporaryDirectory() as tmpdir:
-        output_dir = os.path.join(tmpdir, "out")
-        os.makedirs(output_dir, exist_ok=True)
+        printer_path = Path(tmpdir) / "printer.json"
+        process_path = Path(tmpdir) / "process.json"
+        filament_path = Path(tmpdir) / "filament.json"
+        output_dir = Path(tmpdir) / "out"
+        output_dir.mkdir(parents=True, exist_ok=True)
 
-        work_3mf = os.path.join(tmpdir, os.path.basename(template_file))
-        shutil.copy2(template_file, work_3mf)
+        printer, process, filament = build_resolved_profiles(
+            machine_profile_name=selected["machine"],
+            process_profile_name=selected["process"],
+            filament_profile_name=selected["filament"],
+            overrides=overrides,
+        )
 
-        inject_stl_into_3mf(work_3mf, stl_path)
-        patch_project_settings_in_3mf(work_3mf, slicer_overrides)
+        printer_path.write_text(json.dumps(printer, indent=2, ensure_ascii=False), encoding="utf-8")
+        process_path.write_text(json.dumps(process, indent=2, ensure_ascii=False), encoding="utf-8")
+        filament_path.write_text(json.dumps(filament, indent=2, ensure_ascii=False), encoding="utf-8")
 
         cmd = [
             ORCA_PATH,
+            "--load-settings", f"{printer_path};{process_path}",
+            "--load-filaments", str(filament_path),
+            "--outputdir", str(output_dir),
             "--slice", "0",
-            "--outputdir", output_dir,
-            work_3mf,
+            stl_path,
         ]
 
         proc = subprocess.run(
@@ -176,104 +189,11 @@ def run_orca_slice(stl_path: str, material: str, support_material_type: str, sli
                 f"Orca failed with code {proc.returncode}\nSTDOUT:\n{proc.stdout}\nSTDERR:\n{proc.stderr}"
             )
 
-        gcode_path = os.path.join(output_dir, "plate_1.gcode")
-        if not os.path.exists(gcode_path):
+        gcode_path = output_dir / "plate_1.gcode"
+        if not gcode_path.exists():
             raise OrcaSliceError("plate_1.gcode was not generated")
 
-        return parse_gcode(gcode_path)
-
-
-def inject_stl_into_3mf(template_3mf_path: str, stl_path: str) -> None:
-    temp_extract_dir = tempfile.mkdtemp(prefix="three_mf_extract_")
-    temp_generated_dir = tempfile.mkdtemp(prefix="generated_3mf_")
-
-    try:
-        with zipfile.ZipFile(template_3mf_path, "r") as zf:
-            zf.extractall(temp_extract_dir)
-
-        extracted_template = Path(temp_extract_dir)
-        target_model = extracted_template / "3D" / "3dmodel.model"
-
-        if not target_model.exists():
-            raise OrcaSliceError("Template 3MF does not contain 3D/3dmodel.model")
-
-        mesh = trimesh.load_mesh(stl_path, file_type="stl")
-        if mesh is None or mesh.is_empty:
-            raise OrcaSliceError("Uploaded STL could not be loaded")
-
-        generated_3mf = Path(temp_generated_dir) / "generated.3mf"
-        mesh.export(generated_3mf)
-
-        generated_extract = Path(temp_generated_dir) / "unzipped"
-        generated_extract.mkdir(parents=True, exist_ok=True)
-
-        with zipfile.ZipFile(generated_3mf, "r") as zf:
-            zf.extractall(generated_extract)
-
-        generated_model = generated_extract / "3D" / "3dmodel.model"
-        if not generated_model.exists():
-            raise OrcaSliceError("Generated 3MF does not contain 3D/3dmodel.model")
-
-        shutil.copy2(generated_model, target_model)
-
-        rebuilt_3mf = template_3mf_path + ".rebuilt"
-        with zipfile.ZipFile(rebuilt_3mf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-            for file_path in extracted_template.rglob("*"):
-                if file_path.is_file():
-                    arcname = file_path.relative_to(extracted_template).as_posix()
-                    zf.write(file_path, arcname)
-
-        os.replace(rebuilt_3mf, template_3mf_path)
-
-    finally:
-        shutil.rmtree(temp_extract_dir, ignore_errors=True)
-        shutil.rmtree(temp_generated_dir, ignore_errors=True)
-
-
-def patch_project_settings_in_3mf(template_3mf_path: str, overrides: Dict) -> None:
-    temp_extract_dir = tempfile.mkdtemp(prefix="three_mf_patch_")
-
-    try:
-        with zipfile.ZipFile(template_3mf_path, "r") as zf:
-            zf.extractall(temp_extract_dir)
-
-        extracted = Path(temp_extract_dir)
-        project_config = extracted / "Metadata" / "project_settings.config"
-
-        if not project_config.exists():
-            raise OrcaSliceError("Template 3MF does not contain Metadata/project_settings.config")
-
-        text = project_config.read_text(encoding="utf-8", errors="ignore")
-
-        def replace_setting(content: str, key: str, value: str) -> str:
-            pattern = re.compile(rf"(^\s*{re.escape(key)}\s*=\s*).*$", re.MULTILINE)
-            if pattern.search(content):
-                return pattern.sub(rf"\1{value}", content)
-            return content + f"\n{key} = {value}\n"
-
-        infill_percent = float(overrides["infill_percent"])
-        perimeter_count = int(overrides["perimeter_count"])
-        top_layers = int(overrides["top_layers"])
-        bottom_layers = int(overrides["bottom_layers"])
-
-        text = replace_setting(text, "sparse_infill_density", f"{int(round(infill_percent))}%")
-        text = replace_setting(text, "wall_loops", str(perimeter_count))
-        text = replace_setting(text, "top_shell_layers", str(top_layers))
-        text = replace_setting(text, "bottom_shell_layers", str(bottom_layers))
-
-        project_config.write_text(text, encoding="utf-8")
-
-        rebuilt_3mf = template_3mf_path + ".patched"
-        with zipfile.ZipFile(rebuilt_3mf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-            for file_path in extracted.rglob("*"):
-                if file_path.is_file():
-                    arcname = file_path.relative_to(extracted).as_posix()
-                    zf.write(file_path, arcname)
-
-        os.replace(rebuilt_3mf, template_3mf_path)
-
-    finally:
-        shutil.rmtree(temp_extract_dir, ignore_errors=True)
+        return parse_gcode(str(gcode_path))
 
 
 def _split_csv_header_values(raw: str) -> List[str]:
