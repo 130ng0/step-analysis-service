@@ -5,17 +5,14 @@ echo "[orca-worker] container started"
 
 mkdir -p /workspace/profiles
 mkdir -p /workspace/stl-test
-mkdir -p /workspace/templates
 mkdir -p /workspace/out
 
 # Workspace-Inhalte bewusst aktualisieren
 rm -rf /workspace/profiles/*
 rm -rf /workspace/stl-test/*
-rm -rf /workspace/templates/*
 
 cp -r /seed/profiles/. /workspace/profiles/
 cp -r /seed/stl-test/. /workspace/stl-test/
-cp -r /seed/templates/. /workspace/templates/
 
 echo "[orca-worker] profiles in /workspace/profiles:"
 find /workspace/profiles -maxdepth 3 -type f | sort || true
@@ -23,7 +20,5 @@ find /workspace/profiles -maxdepth 3 -type f | sort || true
 echo "[orca-worker] stl files in /workspace/stl-test:"
 find /workspace/stl-test -maxdepth 2 -type f | sort || true
 
-echo "[orca-worker] templates in /workspace/templates:"
-find /workspace/templates -maxdepth 2 -type f | sort || true
 
 exec uvicorn api:app --host 0.0.0.0 --port 8090
