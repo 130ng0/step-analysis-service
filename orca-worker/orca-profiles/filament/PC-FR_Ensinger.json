@@ -1,4 +1,5 @@
 {
+  "type": "filament",
   "chamber_temperature": [
     "90"
   ],
@@ -87,7 +88,6 @@
   "hot_plate_temp_initial_layer": [
     "110"
   ],
-  "inherits": "Generic ABS @System",
   "internal_bridge_fan_speed": [
     "0"
   ],
@@ -115,16 +115,5 @@
   ],
   "support_material_interface_fan_speed": [
     "0"
-  ],
-  "version": "2.3.1.10",
-  "compatible_printers": [
-    "EL-140V3 v.2.0"
-  ],
-  "compatible_printer_model": [
-    "Generic Marlin Printer"
-  ],
-  "supported_nozzle_diameters": [
-    "0.4",
-    "0.4"
   ]
 }

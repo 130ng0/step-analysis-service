@@ -1,4 +1,5 @@
 {
+  "type": "machine",
   "change_filament_gcode": "G92 E0\nSET_VELOCITY_LIMIT ACCEL=3500\nG91\nG1 Z1 F480 ; move Z axis 1mm\nG90 ; set all axes to absolute\n\n; Tool change logic\n{if next_extruder == 0}\n  T1 ; switch to tool head T1\n  ; Cleaning T1\n{if layer_num % 20 == 0} \nG92 E0\nBRUSH_ACTIVE_NOZZLE\n{endif}\nM104 S{first_layer_temperature[1] - standby_temperature_delta }\n  T0 ; switch to tool head T0\n  {if layer_z < 0.39}\n ;BRUSH_ACTIVE_NOZZLE\n  {endif}\n{else}\n  T0 ; switch to tool head T0\n  ; Cleaning T0\n{if layer_num % 20 == 0} \nG92 E0\nBRUSH_ACTIVE_NOZZLE\n{endif}\nM104 S{first_layer_temperature[0] - standby_temperature_delta }\n  T1 ; switch to tool head T1\n  {if layer_z < 0.39}\n    BRUSH_ACTIVE_NOZZLE\n    G91\n    G92 E0\n    G4 S0\n    G90\n  {endif}\n{endif}\n\nG91\nG1 Z-1 F480 ; move Z axis 1mm\nG90 ; set all axes to absolute\nSET_VELOCITY_LIMIT ACCEL=2000\n\n; Tool Change Script Ending\n",
   "cooling_tube_length": "0",
   "cooling_tube_retraction": "0",
@@ -21,8 +22,6 @@
   ],
   "from": "User",
   "gcode_flavor": "klipper",
-  "host_type": "repetier",
-  "inherits": "MyMarlin 0.4 nozzle",
   "is_custom_defined": "0",
   "layer_change_gcode": "; AFTER_LAYER_CHANGE\n; [layer_z]\nG92 E0",
   "long_retractions_when_cut": [
@@ -73,14 +72,13 @@
     "0.15",
     "0.15"
   ],
-  "name": "EL-140V3 v.2.0",
+  "name": "EL-140V3",
   "nozzle_diameter": [
     "0.4",
     "0.4"
   ],
   "nozzle_type": "brass",
   "parking_pos_retraction": "0",
-  "print_host": "192.168.208.144",
   "printable_area": [
     "0x43",
     "570x43",
@@ -89,9 +87,7 @@
   ],
   "printable_height": "570",
   "printer_notes": "EL-140V3",
-  "printer_settings_id": "EL-140V3 v.2.0",
-  "printhost_apikey": "cc990130-50eb-452b-b621-4d83b7e19c40",
-  "printhost_port": "Klipper",
+  "printer_settings_id": "EL-140V3",
   "purge_in_prime_tower": "0",
   "retract_before_wipe": [
     "100%",
@@ -165,6 +161,4 @@
     "Normal Lift",
     "Normal Lift"
   ],
-  "printer_model": "Generic Marlin Printer",
-  "printer_variant": "0.4"
 }

@@ -1,17 +1,10 @@
 {
+  "type": "filament",
   "chamber_temperature": [
     "60"
   ],
   "close_fan_the_first_x_layers": [
     "2"
-  ],
-  "compatible_printers": [
-    "EL-140V3 v.2.0"
-  ],
-  "compatible_prints": [
-    "Dualprint 0.6mm v2.0",
-    "Standard 0.6mm v2.0",
-    "Standard v.1.1 (REVO) 0.6mm"
   ],
   "default_filament_colour": [
     "#80FF00"
@@ -65,7 +58,6 @@
   "hot_plate_temp_initial_layer": [
     "95"
   ],
-  "inherits": "eSUN PLA+ @System",
   "internal_bridge_fan_speed": [
     "30"
   ],
@@ -103,13 +95,5 @@
   ],
   "temperature_vitrification": [
     "90"
-  ],
-  "version": "2.3.0.4",
-  "compatible_printer_model": [
-    "Generic Marlin Printer"
-  ],
-  "supported_nozzle_diameters": [
-    "0.6",
-    "0.6"
   ]
 }

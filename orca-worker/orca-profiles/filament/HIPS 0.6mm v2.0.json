@@ -1,15 +1,10 @@
 {
+  "type": "filament",
   "chamber_temperature": [
     "75"
   ],
   "close_fan_the_first_x_layers": [
     "3"
-  ],
-  "compatible_printers": [
-    "EL-140V3 v.2.0"
-  ],
-  "compatible_prints": [
-    "Dualprint 0.6mm v2.0"
   ],
   "default_filament_colour": [
     "#0000FF"
@@ -57,7 +52,6 @@
   "hot_plate_temp_initial_layer": [
     "95"
   ],
-  "inherits": "eSUN PLA+ @System",
   "is_custom_defined": "0",
   "name": "HIPS 0.6mm v2.0",
   "nozzle_temperature": [
@@ -89,13 +83,5 @@
   ],
   "temperature_vitrification": [
     "80"
-  ],
-  "version": "2.3.0.4",
-  "compatible_printer_model": [
-    "Generic Marlin Printer"
-  ],
-  "supported_nozzle_diameters": [
-    "0.6",
-    "0.6"
   ]
 }

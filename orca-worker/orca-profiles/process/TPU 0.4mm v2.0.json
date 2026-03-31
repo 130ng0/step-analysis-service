@@ -1,4 +1,5 @@
 {
+  "type": "process",
   "bottom_shell_layers": "4",
   "bridge_acceleration": "2000",
   "bridge_flow": "1",
@@ -20,7 +21,6 @@
   "infill_direction": "0",
   "infill_jerk": "8",
   "infill_wall_overlap": "15%",
-  "inherits": "0.20mm Standard @MyMarlin",
   "initial_layer_acceleration": "1800",
   "initial_layer_infill_speed": "30",
   "initial_layer_jerk": "3",
@@ -93,17 +93,4 @@
   "wall_loops": "4",
   "wall_transition_angle": "30",
   "wipe_speed": "100",
-  "compatible_printers": [
-    "EL-140V3 v.2.0"
-  ],
-  "compatible_printer_model": [
-    "Generic Marlin Printer"
-  ],
-  "printer_model": "Generic Marlin Printer",
-  "printer_variant": "0.4",
-  "supported_nozzle_diameters": [
-    "0.4",
-    "0.4"
-  ],
-  "layer_height": "0.2"
 }

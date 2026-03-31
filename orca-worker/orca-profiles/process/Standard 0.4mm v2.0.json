@@ -1,4 +1,5 @@
 {
+  "type": "process",
   "bottom_shell_layers": "5",
   "bottom_solid_infill_flow_ratio": "0.99",
   "bridge_acceleration": "3000",
@@ -13,13 +14,12 @@
   "elefant_foot_compensation_layers": "2",
   "enable_support": "1",
   "filename_format": "{input_filename_base}_{printer_notes}_{filament_type[initial_tool]}_{print_time}_{notes}.gcode",
-  "from": "User",
+  "from": "user",
   "gap_infill_speed": "60",
   "independent_support_layer_height": "0",
   "infill_anchor": "1000",
   "infill_anchor_max": "1000",
   "infill_jerk": "5",
-  "inherits": "0.20mm Standard @MyMarlin",
   "initial_layer_acceleration": "3000",
   "initial_layer_infill_speed": "50",
   "initial_layer_jerk": "2",
@@ -92,17 +92,4 @@
   "wipe_before_external_loop": "1",
   "wipe_on_loops": "1",
   "wipe_speed": "100",
-  "compatible_printers": [
-    "EL-140V3 v.2.0"
-  ],
-  "compatible_printer_model": [
-    "Generic Marlin Printer"
-  ],
-  "printer_model": "Generic Marlin Printer",
-  "printer_variant": "0.4",
-  "supported_nozzle_diameters": [
-    "0.4",
-    "0.4"
-  ],
-  "layer_height": "0.2"
 }
