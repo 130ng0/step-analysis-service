@@ -93,5 +93,9 @@
   "wall_transition_length": "150%",
   "wipe_before_external_loop": "1",
   "wipe_on_loops": "1",
-  "wipe_speed": "100"
+  "wipe_speed": "100",
+  "compatible_printers": [
+  "EL-140V3"
+  ],
+  "compatible_printers_condition": ""
 }
