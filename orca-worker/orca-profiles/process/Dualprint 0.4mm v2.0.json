@@ -101,5 +101,5 @@
   "wipe_speed": "100",
   "wipe_tower_bridging": "5",
   "wipe_tower_max_purge_speed": "50",
-  "wipe_tower_wall_type": "cone",
+  "wipe_tower_wall_type": "cone"
 }

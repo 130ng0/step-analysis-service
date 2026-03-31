@@ -92,5 +92,5 @@
   "version": "2.3.1.10",
   "wall_loops": "4",
   "wall_transition_angle": "30",
-  "wipe_speed": "100",
+  "wipe_speed": "100"
 }
