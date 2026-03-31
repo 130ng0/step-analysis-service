@@ -137,7 +137,7 @@ def run_orca_with_profiles(
         )
 
         printer_path = resolved_dir / "printer.json"
-        process_path = resolved_dir / "preset.json"
+        process_path = resolved_dir / "process.json"
         filament_path = resolved_dir / "filament.json"
 
         debug_dir = Path("/workspace/debug-last")
