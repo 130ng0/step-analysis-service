@@ -15,22 +15,25 @@
         "15"
     ],
     "fan_max_speed": [
-        "30"
+        "20"
     ],
     "fan_min_speed": [
-        "30"
+        "20"
     ],
     "filament_cost": [
+        "35"
+    ],
+    "filament_deretraction_speed": [
         "35"
     ],
     "filament_extruder_variant": [
         "Direct Drive Standard"
     ],
     "filament_flow_ratio": [
-        "0.96"
+        "1.01"
     ],
     "filament_max_volumetric_speed": [
-        "20"
+        "15"
     ],
     "filament_notes": [
         "Pls dry the filament!\n8h-12h 70°C"
@@ -38,11 +41,11 @@
     "filament_retraction_length": [
         "1"
     ],
-    "filament_retraction_minimum_travel": [
-        "3"
+    "filament_retraction_speed": [
+        "35"
     ],
     "filament_settings_id": [
-        "ABS-CF PRO 0.6mm 2.0"
+        "ABS-CF PRO 0.4mm v2.0"
     ],
     "filament_type": [
         "ABS-CF PRO"
@@ -67,7 +70,7 @@
     "ironing_fan_speed": [
         "0"
     ],
-    "name": "ABS-CF PRO 0.6mm 2.0",
+    "name": "ABS-CF PRO 0.4mm v2.0",
     "nozzle_temperature": [
         "245"
     ],

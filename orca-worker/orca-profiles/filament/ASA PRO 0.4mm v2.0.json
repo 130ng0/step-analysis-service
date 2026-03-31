@@ -15,37 +15,31 @@
         "15"
     ],
     "fan_max_speed": [
-        "30"
+        "20"
     ],
     "fan_min_speed": [
-        "30"
+        "20"
     ],
     "filament_cost": [
-        "35"
+        "42"
     ],
     "filament_extruder_variant": [
         "Direct Drive Standard"
     ],
     "filament_flow_ratio": [
-        "0.96"
+        "0.97"
     ],
     "filament_max_volumetric_speed": [
-        "20"
+        "15"
     ],
     "filament_notes": [
         "Pls dry the filament!\n8h-12h 70°C"
     ],
-    "filament_retraction_length": [
-        "1"
-    ],
-    "filament_retraction_minimum_travel": [
-        "3"
-    ],
     "filament_settings_id": [
-        "ABS-CF PRO 0.6mm 2.0"
+        "ASA PRO 0.4mm v2.0"
     ],
     "filament_type": [
-        "ABS-CF PRO"
+        "ASA PRO"
     ],
     "filament_vendor": [
         "NEVO3D"
@@ -55,7 +49,7 @@
         "4"
     ],
     "hot_plate_temp": [
-        "90"
+        "100"
     ],
     "hot_plate_temp_initial_layer": [
         "100"
@@ -67,18 +61,18 @@
     "ironing_fan_speed": [
         "0"
     ],
-    "name": "ABS-CF PRO 0.6mm 2.0",
+    "name": "ASA PRO 0.4mm v2.0",
     "nozzle_temperature": [
-        "245"
+        "270"
     ],
     "nozzle_temperature_initial_layer": [
-        "250"
+        "270"
     ],
     "nozzle_temperature_range_high": [
         "260"
     ],
     "nozzle_temperature_range_low": [
-        "220"
+        "240"
     ],
     "overhang_fan_speed": [
         "60"
@@ -96,7 +90,7 @@
         "30"
     ],
     "temperature_vitrification": [
-        "90"
+        "80"
     ],
     "version": "2.3.0.4"
 }

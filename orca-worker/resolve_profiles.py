@@ -85,11 +85,9 @@ def resolve_profile(
 def cleanup_profile(data: dict[str, Any], profile_kind: str, original_name: str) -> dict[str, Any]:
     cleaned = dict(data)
     cleaned.pop("inherits", None)
-    cleaned["from"] = "system"
-    cleaned["name"] = cleaned.get("name") or original_name
     cleaned["type"] = profile_kind
-    cleaned["is_custom_defined"] = "0"
-    cleaned.setdefault("instantiation", "true")
+    cleaned["name"] = cleaned.get("name") or original_name
+    cleaned.setdefault("is_custom_defined", "0")
     return cleaned
 
 
@@ -101,94 +99,112 @@ def _as_list(value: Any) -> list[Any]:
     return [value]
 
 
-def _repeat_to_length(values: list[Any], length: int, default: Any) -> list[Any]:
-    if length <= 0:
+def _repeat_last(values: list[Any], count: int) -> list[Any]:
+    if count <= 0:
         return []
     if not values:
-        return [default] * length
-    if len(values) >= length:
-        return values[:length]
-    last = values[-1]
-    return values + [last] * (length - len(values))
-
-
-def _ensure_list_length(data: dict[str, Any], key: str, length: int, default: Any) -> None:
-    values = _as_list(data.get(key))
-    data[key] = _repeat_to_length(values, length, default)
+        return []
+    if len(values) >= count:
+        return values[:count]
+    return values + [values[-1]] * (count - len(values))
 
 
 def _infer_extruder_count(printer: dict[str, Any]) -> int:
     nozzle = _as_list(printer.get("nozzle_diameter"))
     if nozzle:
         return len(nozzle)
+
+    extruder_ids = _as_list(printer.get("printer_extruder_id"))
+    if extruder_ids:
+        return len(extruder_ids)
+
     offsets = _as_list(printer.get("extruder_offset"))
     if offsets:
         return len(offsets)
+
     return 1
 
 
-def patch_printer_for_orca(printer: dict[str, Any]) -> dict[str, Any]:
+def _infer_target_nozzle_from_process(process: dict[str, Any], printer: dict[str, Any]) -> str:
+    supported = _as_list(process.get("supported_nozzle_diameters"))
+    if supported:
+        return str(supported[0])
+
+    line_width = process.get("line_width")
+    if line_width is not None:
+        try:
+            lw = float(str(line_width).replace(",", "."))
+            if lw >= 0.55:
+                return "0.6"
+            return "0.4"
+        except ValueError:
+            pass
+
+    current = _as_list(printer.get("nozzle_diameter"))
+    if current:
+        return str(current[0])
+
+    return "0.4"
+
+
+def patch_printer_for_process(printer: dict[str, Any], process: dict[str, Any]) -> dict[str, Any]:
     patched = dict(printer)
 
     extruder_count = _infer_extruder_count(patched)
+    target_nozzle = _infer_target_nozzle_from_process(process, patched)
 
-    _ensure_list_length(patched, "nozzle_diameter", extruder_count, "0.4")
-    _ensure_list_length(patched, "extruder_offset", extruder_count, "0x0")
-    _ensure_list_length(patched, "deretraction_speed", extruder_count, "35")
-    _ensure_list_length(patched, "extruder_colour", extruder_count, "#FCE94F")
-    _ensure_list_length(patched, "max_layer_height", extruder_count, "0.28")
-    _ensure_list_length(patched, "min_layer_height", extruder_count, "0.08")
-    _ensure_list_length(patched, "retraction_minimum_travel", extruder_count, "2")
-    _ensure_list_length(patched, "retract_before_wipe", extruder_count, "100%")
-    _ensure_list_length(patched, "retract_when_changing_layer", extruder_count, "0")
-    _ensure_list_length(patched, "retraction_length", extruder_count, "0.4")
-    _ensure_list_length(patched, "retract_length_toolchange", extruder_count, "3")
-    _ensure_list_length(patched, "z_hop", extruder_count, "0.3")
-    _ensure_list_length(patched, "retract_restart_extra", extruder_count, "0")
-    _ensure_list_length(patched, "retract_restart_extra_toolchange", extruder_count, "0")
-    _ensure_list_length(patched, "retraction_speed", extruder_count, "35")
-    _ensure_list_length(patched, "wipe", extruder_count, "1")
-    _ensure_list_length(patched, "long_retractions_when_cut", extruder_count, "0")
-    _ensure_list_length(patched, "retract_lift_above", extruder_count, "0")
-    _ensure_list_length(patched, "retract_lift_below", extruder_count, "0")
-    _ensure_list_length(patched, "retract_lift_enforce", extruder_count, "Top Only")
-    _ensure_list_length(patched, "retraction_distances_when_cut", extruder_count, "18")
-    _ensure_list_length(patched, "travel_slope", extruder_count, "0")
-    _ensure_list_length(patched, "wipe_distance", extruder_count, "1")
-    _ensure_list_length(patched, "z_hop_types", extruder_count, "Normal Lift")
+    # Nur die Nozzle/Variant gezielt anpassen.
+    patched["nozzle_diameter"] = [target_nozzle] * extruder_count
 
-    _ensure_list_length(patched, "machine_max_acceleration_e", extruder_count, "5000")
-    _ensure_list_length(patched, "machine_max_acceleration_extruding", extruder_count, "4000")
-    _ensure_list_length(patched, "machine_max_acceleration_retracting", extruder_count, "5000")
-    _ensure_list_length(patched, "machine_max_speed_e", extruder_count, "20")
-    _ensure_list_length(patched, "machine_min_extruding_rate", extruder_count, "0")
-    _ensure_list_length(patched, "machine_min_travel_rate", extruder_count, "0")
+    if "printer_variant" in patched or "printer_model" in patched:
+        patched["printer_variant"] = target_nozzle
 
-    nozzle_values = [str(v) for v in _as_list(patched.get("nozzle_diameter"))]
-    patched["nozzle_diameter"] = _repeat_to_length(nozzle_values, extruder_count, "0.4")
+    # Falls Orca-Export diese Felder schon enthält, konsistent halten.
+    if "supported_nozzle_diameters" in patched:
+        patched["supported_nozzle_diameters"] = [target_nozzle] * extruder_count
 
-    # Variant must match the real nozzle profile.
-    patched["printer_variant"] = str(patched["nozzle_diameter"][0])
+    if "default_nozzle_diameter" in patched:
+        patched["default_nozzle_diameter"] = target_nozzle
 
-    # Critical Orca extruder metadata
-    patched["extruder_type"] = ["Direct Drive"] * extruder_count
-    patched["nozzle_volume_type"] = ["Standard"] * extruder_count
-    patched["default_nozzle_volume_type"] = "Standard"
-
-    # This is the missing companion field very likely required by Orca.
-    patched["nozzle_volume"] = ["Standard"] * extruder_count
-
-    # Explicit physical mapping for both tools.
-    patched["physical_extruder_map"] = [str(i) for i in range(extruder_count)]
-
-    # Sensible generic defaults
-    patched.setdefault("printer_technology", "FFF")
-    patched.setdefault("printer_model", "Generic Marlin Printer")
-    patched.setdefault("setting_id", "GM001")
-    patched.setdefault("silent_mode", "0")
-    patched.setdefault("machine_pause_gcode", "M601")
-    patched.setdefault("default_print_profile", "")
-    patched.setdefault("before_layer_change_gcode", ";BEFORE_LAYER_CHANGE\n;[layer_z]\nG92 E0\n")
+    # Bereits exportierte Multi-Extruder-Felder auf korrekte Länge bringen,
+    # aber keine neuen Orca-internen Felder erfinden.
+    for key in (
+        "extruder_colour",
+        "extruder_offset",
+        "printer_extruder_id",
+        "extruder_type",
+        "extruder_variant_list",
+        "printer_extruder_variant",
+        "default_nozzle_volume_type",
+        "machine_max_acceleration_e",
+        "machine_max_acceleration_extruding",
+        "machine_max_acceleration_retracting",
+        "machine_max_speed_e",
+        "machine_max_jerk_e",
+        "retraction_length",
+        "retraction_speed",
+        "deretraction_speed",
+        "retract_length_toolchange",
+        "retract_restart_extra",
+        "retract_restart_extra_toolchange",
+        "retract_when_changing_layer",
+        "retraction_minimum_travel",
+        "retraction_distances_when_cut",
+        "long_retractions_when_cut",
+        "z_hop",
+        "z_hop_types",
+        "wipe",
+        "wipe_distance",
+        "retract_before_wipe",
+        "retract_lift_above",
+        "retract_lift_below",
+        "retract_lift_enforce",
+        "max_layer_height",
+        "min_layer_height",
+        "travel_slope",
+    ):
+        if key in patched and isinstance(patched[key], list):
+            patched[key] = _repeat_last(patched[key], extruder_count)
 
     return patched
 
@@ -245,14 +261,10 @@ def patch_filament_for_printer(filament: dict[str, Any], printer: dict[str, Any]
         else:
             patched["supported_nozzle_diameters"] = [str(nozzle)]
 
-    # Expand all list-valued filament settings to match printer extruder count.
+    # Nur bestehende Listen auf Extruderanzahl bringen.
     for key, value in list(patched.items()):
         if isinstance(value, list):
-            default = value[-1] if value else ""
-            patched[key] = _repeat_to_length(value, extruder_count, default)
-
-    # Critical pairing for Orca's extruder lookup.
-    patched["filament_extruder_variant"] = ["Direct Drive Standard"] * extruder_count
+            patched[key] = _repeat_last(value, extruder_count)
 
     return patched
 
@@ -311,7 +323,7 @@ def resolve_profile_set(
     process = cleanup_profile(process, "process", process_name)
     filament = cleanup_profile(filament, "filament", filament_name)
 
-    machine = patch_printer_for_orca(machine)
+    machine = patch_printer_for_process(machine, process)
     process = patch_process_for_printer(process, machine)
     filament = patch_filament_for_printer(filament, machine)
 

@@ -1,9 +1,16 @@
 {
     "chamber_temperature": [
-        "60"
+        "75"
     ],
     "close_fan_the_first_x_layers": [
         "2"
+    ],
+    "compatible_printers": [
+        "MyMarlin 0.4 nozzle"
+    ],
+    "compatible_prints": [
+        "Standard 1mm v2.0",
+        "Standard v.1.1 (REVO) 1mm"
     ],
     "default_filament_colour": [
         "#80FF00"
@@ -15,40 +22,40 @@
         "15"
     ],
     "fan_max_speed": [
-        "30"
+        "60"
     ],
     "fan_min_speed": [
-        "30"
+        "60"
     ],
     "filament_cost": [
-        "35"
-    ],
-    "filament_extruder_variant": [
-        "Direct Drive Standard"
+        "28"
     ],
     "filament_flow_ratio": [
-        "0.96"
+        "0.95"
     ],
     "filament_max_volumetric_speed": [
-        "20"
+        "25"
     ],
     "filament_notes": [
         "Pls dry the filament!\n8h-12h 70°C"
     ],
     "filament_retraction_length": [
-        "1"
+        "0.8"
     ],
     "filament_retraction_minimum_travel": [
-        "3"
+        "4"
     ],
     "filament_settings_id": [
-        "ABS-CF PRO 0.6mm 2.0"
+        "ABS PRO 1mm v2.0"
     ],
     "filament_type": [
-        "ABS-CF PRO"
+        "ABS PRO"
     ],
     "filament_vendor": [
         "NEVO3D"
+    ],
+    "filament_z_hop": [
+        "0.8"
     ],
     "from": "User",
     "full_fan_speed_layer": [
@@ -67,21 +74,22 @@
     "ironing_fan_speed": [
         "0"
     ],
-    "name": "ABS-CF PRO 0.6mm 2.0",
+    "is_custom_defined": "0",
+    "name": "ABS PRO 1mm v2.0",
     "nozzle_temperature": [
-        "245"
+        "240"
     ],
     "nozzle_temperature_initial_layer": [
-        "250"
+        "240"
     ],
     "nozzle_temperature_range_high": [
         "260"
     ],
     "nozzle_temperature_range_low": [
-        "220"
+        "230"
     ],
     "overhang_fan_speed": [
-        "60"
+        "80"
     ],
     "overhang_fan_threshold": [
         "95%"
