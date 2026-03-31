@@ -5,187 +5,118 @@ from pathlib import Path
 from typing import Any
 
 
-PROFILES_BASE = Path("/workspace/profiles")
-ORCA_RESOURCES = Path("/opt/orca/squashfs-root/resources")
-
-
-class ProfileResolutionError(Exception):
+class ProfileLoaderError(Exception):
     pass
 
 
-def load_json(path: Path) -> dict[str, Any]:
-    return json.loads(path.read_text(encoding="utf-8"))
+def select_profile_set(material_profile: str, support_material_type: str) -> dict[str, str]:
+    """
+    Basis-Mapping auf Grundlage deiner aktuellen ZIP.
+
+    Standard:
+    - 0.6 mm
+    - breakaway aktuell ebenfalls mit Standard-Prozess
+
+    Spezialfälle:
+    - tpu -> TPU 0.4
+    - pc_fr -> Standard 0.4
+    """
+    if material_profile == "tpu":
+        return {
+            "machine": "EL-140V3 v.2.0",
+            "process": "TPU 0.4mm v2.0",
+            "filament": "TPU v.1.1 (REVO) 0.4mm",
+        }
+
+    if material_profile == "pc_fr":
+        return {
+            "machine": "EL-140V3 v.2.0",
+            "process": "Standard 0.4mm v2.0",
+            "filament": "PC-FR Ensinger",
+        }
+
+    filament_map = {
+        "abs": "ABS PRO 0.6mm v2.0",
+        "abs_cf": "ABS-CF PRO 0.6mm 2.0",
+        "abs_esd": "ABS-ESD PRO 0.6mm v2.0",
+        "asa": "ASA PRO 0.6mm v2.0",
+        "pc": "PC PRO 0.6mm v2.0",
+        "pc_cf": "PC-CF PRO 0.6mm v2.0",
+    }
+
+    filament_name = filament_map.get(material_profile)
+    if not filament_name:
+        raise ProfileLoaderError(f"No filament mapping configured for material: {material_profile}")
+
+    return {
+        "machine": "EL-140V3 v.2.0",
+        "process": "Standard 0.6mm v2.0",
+        "filament": filament_name,
+    }
 
 
-def normalize_name(name: str) -> str:
-    return name.strip().lower()
+def build_minimal_printer_preset(machine_name: str) -> dict[str, Any]:
+    """
+    Minimaler Maschinen-Preset.
+    Nur inherits + identity.
+    Keine compatibility-Felder.
+    """
+    return {
+        "type": "machine",
+        "from": "User",
+        "inherits": machine_name,
+        "name": f"API {machine_name}",
+        "printer_settings_id": f"API {machine_name}",
+        "is_custom_defined": "0",
+        "version": "2.3.1.10",
+    }
 
 
-def candidate_files() -> list[Path]:
-    files: list[Path] = []
-
-    for base in [
-        PROFILES_BASE,
-        ORCA_RESOURCES / "profiles",
-        ORCA_RESOURCES / "profiles_template",
-    ]:
-        if base.exists():
-            files.extend(base.rglob("*.json"))
-
-    return files
-
-
-def find_profile_file(profile_name: str, candidates: list[Path]) -> Path:
-    wanted = normalize_name(profile_name)
-    for path in candidates:
-        if normalize_name(path.stem) == wanted:
-            return path
-    raise ProfileResolutionError(f"Profile not found: {profile_name}")
-
-
-def merge_dicts(parent: dict[str, Any], child: dict[str, Any]) -> dict[str, Any]:
-    merged = dict(parent)
-    for k, v in child.items():
-        if k == "inherits":
-            continue
-        merged[k] = v
-    return merged
+def build_minimal_process_preset(
+    process_name: str,
+    infill_percent: float,
+    perimeter_count: int,
+    top_layers: int,
+    bottom_layers: int,
+) -> dict[str, Any]:
+    """
+    Minimaler Prozess-Preset mit nur den echten Overrides.
+    Alle compatibility-Felder bewusst weggelassen.
+    """
+    return {
+        "type": "process",
+        "from": "User",
+        "inherits": process_name,
+        "name": f"API {process_name}",
+        "print_settings_id": f"API {process_name}",
+        "is_custom_defined": "0",
+        "version": "2.3.1.10",
+        "sparse_infill_density": f"{int(round(float(infill_percent)))}%",
+        "wall_loops": str(int(perimeter_count)),
+        "top_shell_layers": str(int(top_layers)),
+        "bottom_shell_layers": str(int(bottom_layers)),
+    }
 
 
-def resolve_profile(profile_name: str, candidates: list[Path], seen: set[str] | None = None) -> dict[str, Any]:
-    if seen is None:
-        seen = set()
-
-    key = normalize_name(profile_name)
-    if key in seen:
-        raise ProfileResolutionError(f"Circular inheritance detected: {profile_name}")
-    seen.add(key)
-
-    path = find_profile_file(profile_name, candidates)
-    data = load_json(path)
-
-    parent_name = data.get("inherits")
-    if parent_name:
-        parent = resolve_profile(parent_name, candidates, seen)
-        return merge_dicts(parent, data)
-
-    return data
+def build_minimal_filament_preset(filament_name: str) -> dict[str, Any]:
+    """
+    Minimaler Filament-Preset.
+    Materialdaten kommen aus dem geerbten Profil.
+    Keine compatibility-Felder.
+    """
+    return {
+        "type": "filament",
+        "from": "User",
+        "inherits": filament_name,
+        "name": f"API {filament_name}",
+        "filament_settings_id": [f"API {filament_name}"],
+        "is_custom_defined": "0",
+        "version": "2.3.1.10",
+    }
 
 
-def cleanup_profile(data: dict[str, Any], profile_kind: str, original_name: str) -> dict[str, Any]:
-    cleaned = dict(data)
-
-    cleaned.pop("inherits", None)
-    cleaned.pop("compatible_printers_condition", None)
-    cleaned.pop("compatible_prints_condition", None)
-
-    cleaned["from"] = "User"
-    cleaned["name"] = cleaned.get("name") or original_name
-    cleaned["type"] = profile_kind
-
-    return cleaned
-
-
-def patch_printer(printer: dict[str, Any], printer_name: str, process_name: str, filament_name: str) -> dict[str, Any]:
-    patched = dict(printer)
-    patched["name"] = printer_name
-    patched["from"] = "User"
-    patched["type"] = "machine"
-    patched["printer_settings_id"] = printer_name
-
-    # zusätzliche Bindungen
-    patched["default_print_profile"] = process_name
-    patched["default_filament_profile"] = [filament_name]
-
-    return patched
-
-
-def patch_process(process: dict[str, Any], printer: dict[str, Any], process_name: str, overrides: dict[str, Any]) -> dict[str, Any]:
-    patched = dict(process)
-
-    printer_name = printer.get("name")
-    printer_model = printer.get("printer_model")
-    nozzle = printer.get("nozzle_diameter")
-    printer_settings_id = printer.get("printer_settings_id")
-
-    if printer_name:
-        patched["compatible_printers"] = [printer_name]
-        patched["print_compatible_printers"] = [printer_name]
-
-    if printer_model:
-        patched["compatible_printer_model"] = [printer_model]
-
-    if printer_settings_id:
-        patched["printer_settings_id"] = printer_settings_id
-
-    patched["name"] = process_name
-    patched["from"] = "User"
-    patched["type"] = "process"
-
-    patched.pop("compatible_printers_condition", None)
-    patched.pop("compatible_prints_condition", None)
-
-    if nozzle is not None:
-        if isinstance(nozzle, list):
-            patched["supported_nozzle_diameters"] = [str(x) for x in nozzle]
-        else:
-            patched["supported_nozzle_diameters"] = [str(nozzle)]
-
-    patched["sparse_infill_density"] = f"{int(round(float(overrides['infill_percent'])))}%"
-    patched["wall_loops"] = str(int(overrides["perimeter_count"]))
-    patched["top_shell_layers"] = str(int(overrides["top_layers"]))
-    patched["bottom_shell_layers"] = str(int(overrides["bottom_layers"]))
-
-    return patched
-
-
-def patch_filament(filament: dict[str, Any], printer: dict[str, Any], filament_name: str) -> dict[str, Any]:
-    patched = dict(filament)
-
-    printer_name = printer.get("name")
-    printer_model = printer.get("printer_model")
-    nozzle = printer.get("nozzle_diameter")
-
-    if printer_name:
-        patched["compatible_printers"] = [printer_name]
-
-    if printer_model:
-        patched["compatible_printer_model"] = [printer_model]
-
-    patched["name"] = filament_name
-    patched["from"] = "User"
-    patched["type"] = "filament"
-
-    patched.pop("compatible_printers_condition", None)
-    patched.pop("compatible_prints_condition", None)
-
-    if nozzle is not None:
-        if isinstance(nozzle, list):
-            patched["supported_nozzle_diameters"] = [str(x) for x in nozzle]
-        else:
-            patched["supported_nozzle_diameters"] = [str(nozzle)]
-
-    return patched
-
-
-def build_resolved_profiles(
-    machine_profile_name: str,
-    process_profile_name: str,
-    filament_profile_name: str,
-    overrides: dict[str, Any],
-) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
-    candidates = candidate_files()
-
-    printer = resolve_profile(machine_profile_name, candidates)
-    process = resolve_profile(process_profile_name, candidates)
-    filament = resolve_profile(filament_profile_name, candidates)
-
-    printer = cleanup_profile(printer, "machine", machine_profile_name)
-    process = cleanup_profile(process, "process", process_profile_name)
-    filament = cleanup_profile(filament, "filament", filament_profile_name)
-
-    printer = patch_printer(printer, machine_profile_name, process_profile_name, filament_profile_name)
-    process = patch_process(process, printer, process_profile_name, overrides)
-    filament = patch_filament(filament, printer, filament_profile_name)
-
-    return printer, process, filament
+def write_json(path: Path, data: dict[str, Any]) -> None:
+    path.write_text(
+        json.dumps(data, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )

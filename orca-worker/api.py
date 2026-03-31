@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import math
 import os
 import re
@@ -12,9 +11,16 @@ from typing import Dict, List, Literal
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
 
-from profile_loader import ProfileResolutionError, build_resolved_profiles
+from profile_loader import (
+    ProfileLoaderError,
+    build_minimal_filament_preset,
+    build_minimal_printer_preset,
+    build_minimal_process_preset,
+    select_profile_set,
+    write_json,
+)
 
-app = FastAPI(title="Orca Worker API", version="2.0.0")
+app = FastAPI(title="Orca Worker API", version="2.2.0")
 
 ORCA_PATH = "/opt/orca/squashfs-root/AppRun"
 FILAMENT_DIAMETER_MM_DEFAULT = 1.75
@@ -22,42 +28,6 @@ FILAMENT_DIAMETER_MM_DEFAULT = 1.75
 
 class OrcaSliceError(Exception):
     pass
-
-
-def select_profile_set(material_profile: str, support_material_type: str) -> dict[str, str]:
-    # breakaway verwendet laut deiner Vorgabe aktuell auch das Standard-Prozessprofil
-    if material_profile == "tpu":
-        return {
-            "machine": "EL-140V3 v.2.0",
-            "process": "TPU 0.4mm v2.0",
-            "filament": "TPU v.1.1 (REVO) 0.4mm",
-        }
-
-    if material_profile == "pc_fr":
-        return {
-            "machine": "EL-140V3 v.2.0",
-            "process": "Standard 0.4mm v2.0",
-            "filament": "PC-FR_Ensinger",
-        }
-
-    filament_map = {
-        "abs": "ABS PRO 0.6mm v2.0",
-        "abs_cf": "ABS-CF PRO 0.6mm 2.0",
-        "abs_esd": "ABS-ESD PRO 0.6mm v2.0",
-        "asa": "ASA PRO 0.6mm v2.0",
-        "pc": "PC PRO 0.6mm v2.0",
-        "pc_cf": "PC-CF PRO 0.6mm v2.0",
-    }
-
-    filament_name = filament_map.get(material_profile)
-    if not filament_name:
-        raise OrcaSliceError(f"No filament mapping configured for material: {material_profile}")
-
-    return {
-        "machine": "EL-140V3 v.2.0 0.6mm",
-        "process": "Standard 0.6mm v2.0",
-        "filament": filament_name,
-    }
 
 
 @app.get("/health")
@@ -91,18 +61,14 @@ async def slice_model(
             tmp.write(file_bytes)
             tmp_input = tmp.name
 
-        overrides = {
-            "infill_percent": infill_percent,
-            "perimeter_count": perimeter_count,
-            "top_layers": top_layers,
-            "bottom_layers": bottom_layers,
-        }
-
         result = run_orca_with_profiles(
             stl_path=tmp_input,
             material_profile=material_profile,
             support_material_type=support_material_type,
-            overrides=overrides,
+            infill_percent=infill_percent,
+            perimeter_count=perimeter_count,
+            top_layers=top_layers,
+            bottom_layers=bottom_layers,
         )
 
         return {
@@ -111,11 +77,16 @@ async def slice_model(
             "method": "slice",
             "material_profile": material_profile,
             "support_material_type": support_material_type,
-            "applied_slicer_settings": overrides,
+            "applied_slicer_settings": {
+                "infill_percent": infill_percent,
+                "perimeter_count": perimeter_count,
+                "top_layers": top_layers,
+                "bottom_layers": bottom_layers,
+            },
             **result,
         }
 
-    except (OrcaSliceError, ProfileResolutionError) as exc:
+    except (OrcaSliceError, ProfileLoaderError) as exc:
         return JSONResponse(
             status_code=400,
             content={
@@ -147,7 +118,10 @@ def run_orca_with_profiles(
     stl_path: str,
     material_profile: str,
     support_material_type: str,
-    overrides: dict[str, float | int],
+    infill_percent: float,
+    perimeter_count: int,
+    top_layers: int,
+    bottom_layers: int,
 ) -> Dict:
     selected = select_profile_set(material_profile, support_material_type)
 
@@ -158,32 +132,25 @@ def run_orca_with_profiles(
         output_dir = Path(tmpdir) / "out"
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        printer, process, filament = build_resolved_profiles(
-            machine_profile_name=selected["machine"],
-            process_profile_name=selected["process"],
-            filament_profile_name=selected["filament"],
-            overrides=overrides,
+        printer = build_minimal_printer_preset(selected["machine"])
+        process = build_minimal_process_preset(
+            process_name=selected["process"],
+            infill_percent=infill_percent,
+            perimeter_count=perimeter_count,
+            top_layers=top_layers,
+            bottom_layers=bottom_layers,
         )
+        filament = build_minimal_filament_preset(selected["filament"])
 
-        printer_path.write_text(json.dumps(printer, indent=2, ensure_ascii=False), encoding="utf-8")
-        process_path.write_text(json.dumps(process, indent=2, ensure_ascii=False), encoding="utf-8")
-        filament_path.write_text(json.dumps(filament, indent=2, ensure_ascii=False), encoding="utf-8")
+        write_json(printer_path, printer)
+        write_json(process_path, process)
+        write_json(filament_path, filament)
 
         debug_dir = Path("/workspace/debug-last")
         debug_dir.mkdir(parents=True, exist_ok=True)
-
-        (debug_dir / "printer.json").write_text(
-            json.dumps(printer, indent=2, ensure_ascii=False),
-            encoding="utf-8",
-        )
-        (debug_dir / "process.json").write_text(
-            json.dumps(process, indent=2, ensure_ascii=False),
-            encoding="utf-8",
-        )
-        (debug_dir / "filament.json").write_text(
-            json.dumps(filament, indent=2, ensure_ascii=False),
-            encoding="utf-8",
-        )
+        write_json(debug_dir / "printer.json", printer)
+        write_json(debug_dir / "process.json", process)
+        write_json(debug_dir / "filament.json", filament)
 
         cmd = [
             ORCA_PATH,
