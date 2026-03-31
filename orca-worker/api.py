@@ -109,7 +109,6 @@ async def slice_model(
                 pass
 
 
-
 def run_orca_with_profiles(
     stl_path: str,
     material_profile: str,
@@ -175,10 +174,8 @@ def run_orca_with_profiles(
         return parse_gcode(str(gcode_path))
 
 
-
 def _split_csv_header_values(raw: str) -> List[str]:
     return [x.strip().strip('"') for x in raw.replace(";", ",").split(",") if x.strip()]
-
 
 
 def _parse_header_list(raw: str, cast=float) -> List:
@@ -189,7 +186,6 @@ def _parse_header_list(raw: str, cast=float) -> List:
         except Exception:
             pass
     return values
-
 
 
 def parse_gcode(gcode_path: str) -> Dict:
@@ -282,7 +278,6 @@ def parse_gcode(gcode_path: str) -> Dict:
         "filament_usage_by_tool": filament_usage,
         "gcode_generated": True,
     }
-
 
 
 def _parse_time_to_minutes(raw: str) -> int | None:

@@ -157,7 +157,6 @@ def patch_printer_for_orca(printer: dict[str, Any]) -> dict[str, Any]:
     _ensure_list_length(patched, "wipe_distance", extruder_count, "1")
     _ensure_list_length(patched, "z_hop_types", extruder_count, "Normal Lift")
 
-    # Orca expects these extruder-related fields to exist per extruder.
     _ensure_list_length(patched, "machine_max_acceleration_e", extruder_count, "5000")
     _ensure_list_length(patched, "machine_max_acceleration_extruding", extruder_count, "4000")
     _ensure_list_length(patched, "machine_max_acceleration_retracting", extruder_count, "5000")
@@ -168,15 +167,21 @@ def patch_printer_for_orca(printer: dict[str, Any]) -> dict[str, Any]:
     nozzle_values = [str(v) for v in _as_list(patched.get("nozzle_diameter"))]
     patched["nozzle_diameter"] = _repeat_to_length(nozzle_values, extruder_count, "0.4")
 
-    # Keep printer_variant consistent with actual nozzle size.
+    # Variant must match the real nozzle profile.
     patched["printer_variant"] = str(patched["nozzle_diameter"][0])
 
-    # Critical fields for Orca extruder resolution.
+    # Critical Orca extruder metadata
     patched["extruder_type"] = ["Direct Drive"] * extruder_count
     patched["nozzle_volume_type"] = ["Standard"] * extruder_count
     patched["default_nozzle_volume_type"] = "Standard"
 
-    # Safe defaults for generic Marlin-based IDEX setups.
+    # This is the missing companion field very likely required by Orca.
+    patched["nozzle_volume"] = ["Standard"] * extruder_count
+
+    # Explicit physical mapping for both tools.
+    patched["physical_extruder_map"] = [str(i) for i in range(extruder_count)]
+
+    # Sensible generic defaults
     patched.setdefault("printer_technology", "FFF")
     patched.setdefault("printer_model", "Generic Marlin Printer")
     patched.setdefault("setting_id", "GM001")
