@@ -22,6 +22,7 @@
   ],
   "from": "system",
   "gcode_flavor": "klipper",
+  "inherits": "MyMarlin 0.4 nozzle",
   "is_custom_defined": "0",
   "layer_change_gcode": "; AFTER_LAYER_CHANGE\n; [layer_z]\nG92 E0",
   "long_retractions_when_cut": [
