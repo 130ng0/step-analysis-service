@@ -11,12 +11,19 @@ ORCA_RESOURCES = pathlib.Path("/opt/orca/squashfs-root/resources")
 OUT_BASE = pathlib.Path("/workspace/resolved")
 
 
+class ResolveProfilesError(Exception):
+    pass
+
+
+
 def load_json(path: pathlib.Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+
 def normalize_name(name: str) -> str:
     return name.strip().lower()
+
 
 
 def find_candidate_files(base_dirs: list[pathlib.Path]) -> list[pathlib.Path]:
@@ -24,15 +31,28 @@ def find_candidate_files(base_dirs: list[pathlib.Path]) -> list[pathlib.Path]:
     for base in base_dirs:
         if base.exists():
             files.extend(base.rglob("*.json"))
-    return files
+    return sorted(set(files))
+
+
+
+def _matches_profile_name(path: pathlib.Path, wanted: str) -> bool:
+    if normalize_name(path.stem) == wanted:
+        return True
+    try:
+        data = load_json(path)
+    except Exception:
+        return False
+    return normalize_name(str(data.get("name", ""))) == wanted
+
 
 
 def find_profile_file(profile_name: str, candidates: list[pathlib.Path]) -> pathlib.Path:
     wanted = normalize_name(profile_name)
     for path in candidates:
-        if normalize_name(path.stem) == wanted:
+        if _matches_profile_name(path, wanted):
             return path
     raise FileNotFoundError(f"Profile not found: {profile_name}")
+
 
 
 def merge_dicts(parent: dict[str, Any], child: dict[str, Any]) -> dict[str, Any]:
@@ -42,6 +62,7 @@ def merge_dicts(parent: dict[str, Any], child: dict[str, Any]) -> dict[str, Any]
             continue
         merged[k] = v
     return merged
+
 
 
 def resolve_profile(profile_name: str, candidates: list[pathlib.Path], seen: set[str] | None = None) -> dict[str, Any]:
@@ -64,13 +85,16 @@ def resolve_profile(profile_name: str, candidates: list[pathlib.Path], seen: set
     return data
 
 
+
 def cleanup_profile(data: dict[str, Any], profile_kind: str, original_name: str) -> dict[str, Any]:
     cleaned = dict(data)
     cleaned.pop("inherits", None)
-    cleaned["from"] = "User"
+    cleaned["from"] = "system"
     cleaned["name"] = cleaned.get("name") or original_name
     cleaned["type"] = profile_kind
+    cleaned["is_custom_defined"] = "0"
     return cleaned
+
 
 
 def patch_process_for_printer(process: dict[str, Any], printer: dict[str, Any]) -> dict[str, Any]:
@@ -84,6 +108,7 @@ def patch_process_for_printer(process: dict[str, Any], printer: dict[str, Any]) 
 
     if printer_name:
         patched["compatible_printers"] = [printer_name]
+    patched["compatible_printers_condition"] = ""
 
     if printer_model:
         patched["compatible_printer_model"] = [printer_model]
@@ -96,11 +121,12 @@ def patch_process_for_printer(process: dict[str, Any], printer: dict[str, Any]) 
 
     if nozzle is not None:
         if isinstance(nozzle, list):
-            patched["supported_nozzle_diameters"] = nozzle
+            patched["supported_nozzle_diameters"] = [str(v) for v in nozzle]
         else:
             patched["supported_nozzle_diameters"] = [str(nozzle)]
 
     return patched
+
 
 
 def patch_filament_for_printer(filament: dict[str, Any], printer: dict[str, Any]) -> dict[str, Any]:
@@ -112,22 +138,95 @@ def patch_filament_for_printer(filament: dict[str, Any], printer: dict[str, Any]
 
     if printer_name:
         patched["compatible_printers"] = [printer_name]
+    patched["compatible_printers_condition"] = ""
 
     if printer_model:
         patched["compatible_printer_model"] = [printer_model]
 
     if nozzle is not None:
         if isinstance(nozzle, list):
-            patched["supported_nozzle_diameters"] = nozzle
+            patched["supported_nozzle_diameters"] = [str(v) for v in nozzle]
         else:
             patched["supported_nozzle_diameters"] = [str(nozzle)]
 
     return patched
 
 
+
+def apply_process_overrides(
+    process: dict[str, Any],
+    infill_percent: float,
+    perimeter_count: int,
+    top_layers: int,
+    bottom_layers: int,
+) -> dict[str, Any]:
+    patched = dict(process)
+    patched["sparse_infill_density"] = f"{int(round(float(infill_percent)))}%"
+    patched["wall_loops"] = str(int(perimeter_count))
+    patched["top_shell_layers"] = str(int(top_layers))
+    patched["bottom_shell_layers"] = str(int(bottom_layers))
+    return patched
+
+
+
 def write_json(path: pathlib.Path, data: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+
+def resolve_profile_set(
+    machine_name: str,
+    process_name: str,
+    filament_name: str,
+    output_name: str,
+    infill_percent: float | None = None,
+    perimeter_count: int | None = None,
+    top_layers: int | None = None,
+    bottom_layers: int | None = None,
+    user_base: pathlib.Path = USER_BASE,
+    resources_base: pathlib.Path = ORCA_RESOURCES,
+    out_base: pathlib.Path = OUT_BASE,
+) -> pathlib.Path:
+    candidates = find_candidate_files(
+        [
+            user_base,
+            resources_base / "profiles",
+            resources_base / "profiles_template",
+        ]
+    )
+    if not candidates:
+        raise ResolveProfilesError("No profile JSON files found in user or Orca resource directories")
+
+    try:
+        machine = resolve_profile(machine_name, candidates)
+        process = resolve_profile(process_name, candidates)
+        filament = resolve_profile(filament_name, candidates)
+    except Exception as exc:
+        raise ResolveProfilesError(str(exc)) from exc
+
+    machine = cleanup_profile(machine, "machine", machine_name)
+    process = cleanup_profile(process, "process", process_name)
+    filament = cleanup_profile(filament, "filament", filament_name)
+
+    process = patch_process_for_printer(process, machine)
+    filament = patch_filament_for_printer(filament, machine)
+
+    if None not in (infill_percent, perimeter_count, top_layers, bottom_layers):
+        process = apply_process_overrides(
+            process,
+            float(infill_percent),
+            int(perimeter_count),
+            int(top_layers),
+            int(bottom_layers),
+        )
+
+    out_dir = out_base / output_name
+    write_json(out_dir / "printer.json", machine)
+    write_json(out_dir / "preset.json", process)
+    write_json(out_dir / "filament.json", filament)
+    return out_dir
+
 
 
 def main() -> int:
@@ -143,30 +242,7 @@ def main() -> int:
     filament_name = sys.argv[3]
     output_name = sys.argv[4]
 
-    candidates = find_candidate_files(
-        [
-            USER_BASE,
-            ORCA_RESOURCES / "profiles",
-            ORCA_RESOURCES / "profiles_template",
-        ]
-    )
-
-    machine = resolve_profile(machine_name, candidates)
-    process = resolve_profile(process_name, candidates)
-    filament = resolve_profile(filament_name, candidates)
-
-    machine = cleanup_profile(machine, "machine", machine_name)
-    process = cleanup_profile(process, "process", process_name)
-    filament = cleanup_profile(filament, "filament", filament_name)
-
-    process = patch_process_for_printer(process, machine)
-    filament = patch_filament_for_printer(filament, machine)
-
-    out_dir = OUT_BASE / output_name
-    write_json(out_dir / "printer.json", machine)
-    write_json(out_dir / "preset.json", process)
-    write_json(out_dir / "filament.json", filament)
-
+    out_dir = resolve_profile_set(machine_name, process_name, filament_name, output_name)
     print(f"Resolved profiles written to: {out_dir}")
     print(f"  printer : {out_dir / 'printer.json'}")
     print(f"  preset  : {out_dir / 'preset.json'}")
