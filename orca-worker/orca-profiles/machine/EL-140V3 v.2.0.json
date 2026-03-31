@@ -74,8 +74,8 @@
   ],
   "name": "EL-140V3",
   "nozzle_diameter": [
-    "0.4",
-    "0.4"
+    "0.6",
+    "0.6"
   ],
   "nozzle_type": "brass",
   "parking_pos_retraction": "0",
