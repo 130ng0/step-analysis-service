@@ -14,7 +14,7 @@
   "elefant_foot_compensation_layers": "2",
   "enable_support": "1",
   "filename_format": "{input_filename_base}_{printer_notes}_{filament_type[initial_tool]}_{print_time}_{notes}.gcode",
-  "from": "user",
+  "from": "system",
   "gap_infill_speed": "60",
   "independent_support_layer_height": "0",
   "infill_anchor": "1000",
@@ -63,8 +63,8 @@
   "sparse_infill_speed": "120",
   "standby_temperature_delta": "0",
   "support_base_pattern": "rectilinear-grid",
-  "support_filament": "1",
-  "support_interface_filament": "1",
+  "support_filament": "0",
+  "support_interface_filament": "0",
   "support_interface_spacing": "0.2",
   "support_interface_top_layers": "4",
   "support_line_width": "0.48",
@@ -91,5 +91,9 @@
   "wall_transition_angle": "30",
   "wipe_before_external_loop": "1",
   "wipe_on_loops": "1",
-  "wipe_speed": "100"
+  "wipe_speed": "100",
+  "compatible_printers": [
+    "EL-140V3"
+  ],
+  "compatible_printers_condition": ""
 }

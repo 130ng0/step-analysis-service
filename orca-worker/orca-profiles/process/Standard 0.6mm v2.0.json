@@ -65,8 +65,8 @@
   "sparse_infill_speed": "120",
   "standby_temperature_delta": "0",
   "support_base_pattern": "rectilinear-grid",
-  "support_filament": "1",
-  "support_interface_filament": "1",
+  "support_filament": "0",
+  "support_interface_filament": "0",
   "support_interface_spacing": "0.2",
   "support_interface_top_layers": "4",
   "support_line_width": "0.62",
@@ -96,7 +96,7 @@
   "wipe_on_loops": "1",
   "wipe_speed": "100",
   "compatible_printers": [
-  "EL-140V3"
+    "EL-140V3"
   ],
   "compatible_printers_condition": ""
 }
