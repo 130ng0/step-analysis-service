@@ -181,8 +181,17 @@ def patch_printer_for_process(printer: dict[str, Any], process: dict[str, Any]) 
         "machine_max_acceleration_e",
         "machine_max_acceleration_extruding",
         "machine_max_acceleration_retracting",
+        "machine_max_acceleration_x",
+        "machine_max_acceleration_y",
+        "machine_max_acceleration_z",
         "machine_max_speed_e",
+        "machine_max_speed_x",
+        "machine_max_speed_y",
+        "machine_max_speed_z",
         "machine_max_jerk_e",
+        "machine_max_jerk_x",
+        "machine_max_jerk_y",
+        "machine_max_jerk_z",
         "retraction_length",
         "retraction_speed",
         "deretraction_speed",
@@ -204,9 +213,45 @@ def patch_printer_for_process(printer: dict[str, Any], process: dict[str, Any]) 
         "max_layer_height",
         "min_layer_height",
         "travel_slope",
+        "nozzle_type",
+        "nozzle_volume",
+        "nozzle_flush_dataset",
+        "extruder_printable_height",
     ):
         if key in patched and isinstance(patched[key], list):
             patched[key] = _repeat_last(patched[key], extruder_count)
+
+    # Kritisch für IDEX: physisches Extruder-Mapping muss zur Extruderanzahl passen.
+    if extruder_count == 1:
+        patched["physical_extruder_map"] = ["0"]
+    else:
+        patched["physical_extruder_map"] = [str(i) for i in range(extruder_count)]
+
+    # Falls vorhanden, auf richtige Länge bringen
+    if "default_nozzle_volume_type" in patched and isinstance(patched["default_nozzle_volume_type"], list):
+        patched["default_nozzle_volume_type"] = _repeat_last(
+            patched["default_nozzle_volume_type"], extruder_count
+        )
+
+    if "nozzle_volume" in patched and isinstance(patched["nozzle_volume"], list):
+        patched["nozzle_volume"] = _repeat_last(patched["nozzle_volume"], extruder_count)
+
+    # Falls Orca die Felder erwartet, aber sie im Export fehlen, nur minimal ergänzen.
+    if "extruder_type" not in patched:
+        patched["extruder_type"] = ["Direct Drive"] * extruder_count
+
+    if "extruder_variant_list" not in patched:
+        patched["extruder_variant_list"] = ["Direct Drive Standard"] * extruder_count
+
+    if "printer_extruder_variant" not in patched:
+        patched["printer_extruder_variant"] = ["Direct Drive Standard"] * extruder_count
+
+    if "default_nozzle_volume_type" not in patched:
+        patched["default_nozzle_volume_type"] = ["Standard"] * extruder_count
+
+    # Nur wenn das Feld fehlt, minimal sinnvoll ergänzen.
+    if "nozzle_volume" not in patched:
+        patched["nozzle_volume"] = ["Standard"] * extruder_count
 
     return patched
 
