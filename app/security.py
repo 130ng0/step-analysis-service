@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from fastapi import Header, HTTPException
 
 from app.config import API_KEY
