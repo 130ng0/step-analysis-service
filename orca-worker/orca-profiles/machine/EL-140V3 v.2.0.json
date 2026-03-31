@@ -20,7 +20,7 @@
     "0x0",
     "0x0"
   ],
-  "from": "User",
+  "from": "system",
   "gcode_flavor": "klipper",
   "is_custom_defined": "0",
   "layer_change_gcode": "; AFTER_LAYER_CHANGE\n; [layer_z]\nG92 E0",
