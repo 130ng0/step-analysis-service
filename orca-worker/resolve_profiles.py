@@ -87,7 +87,9 @@ def cleanup_profile(data: dict[str, Any], profile_kind: str, original_name: str)
     cleaned.pop("inherits", None)
     cleaned["type"] = profile_kind
     cleaned["name"] = cleaned.get("name") or original_name
-    cleaned.setdefault("is_custom_defined", "0")
+    cleaned["from"] = "system"
+    cleaned["is_custom_defined"] = "0"
+    cleaned.setdefault("instantiation", "true")
     return cleaned
 
 
@@ -233,7 +235,7 @@ def patch_process_for_printer(process: dict[str, Any], printer: dict[str, Any]) 
 
     if nozzle is not None:
         if isinstance(nozzle, list):
-            patched["supported_nozzle_diameters"] = [str(v) for v in nozzle]
+            patched["supported_nozzle_diameters"] = sorted({str(v) for v in nozzle})
         else:
             patched["supported_nozzle_diameters"] = [str(nozzle)]
 
@@ -257,7 +259,7 @@ def patch_filament_for_printer(filament: dict[str, Any], printer: dict[str, Any]
 
     if nozzle is not None:
         if isinstance(nozzle, list):
-            patched["supported_nozzle_diameters"] = [str(v) for v in nozzle]
+            patched["supported_nozzle_diameters"] = sorted({str(v) for v in nozzle})
         else:
             patched["supported_nozzle_diameters"] = [str(nozzle)]
 
