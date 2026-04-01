@@ -169,9 +169,25 @@ def patch_process_for_support_mode(process: dict[str, Any], support_material_typ
     else:
         patched["enable_support"] = "1"
 
-    # Wir slicen Single-Extruder.
+    # Single-extruder slicing; support uses same slicer extruder.
     patched["support_filament"] = "0"
     patched["support_interface_filament"] = "0"
+
+    return patched
+
+
+def patch_process_for_orientation(process: dict[str, Any]) -> dict[str, Any]:
+    patched = dict(process)
+
+    # Orca/Prusa-style process flags. These are harmless if already present.
+    patched["auto_orient"] = "1"
+    patched["ensure_vertical_shell_thickness"] = "1"
+
+    # Some profiles/builds may ignore this, but it is safe to set.
+    patched["rotate_to_minimize_support"] = "1"
+
+    # Keep arrangement predictable for pricing runs.
+    patched.setdefault("print_sequence", "by layer")
 
     return patched
 
@@ -234,8 +250,11 @@ def resolve_profile_set(
     filament = cleanup_profile(filament, "filament", filament_name)
 
     process = patch_process_for_printer(process, machine)
-    filament = patch_filament_for_printer(filament, machine)
     process = patch_process_for_support_mode(process, support_material_type)
+    process = patch_process_for_orientation(process)
+
+    filament = patch_filament_for_printer(filament, machine)
+
     process = apply_process_overrides(
         process,
         infill_percent=infill_percent,
