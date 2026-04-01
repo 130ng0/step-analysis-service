@@ -9,7 +9,7 @@
   "smooth_coefficient": "150",
   "overhang_totally_speed": "50",
   "compatible_printers": [
-    "EL-140V3 0.6 nozzle"
+    "EL-140V3 v.2.0"
   ],
   "elefant_foot_compensation": "0.1",
   "top_shell_thickness": "0",
