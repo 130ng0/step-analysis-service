@@ -219,22 +219,6 @@
     "0",
     "1"
   ],
-  "extruder_type": [
-    "Direct Drive",
-    "Direct Drive"
-  ],
-  "extruder_variant_list": [
-    "Direct Drive Standard",
-    "Direct Drive Standard"
-  ],
-  "printer_extruder_variant": [
-    "Direct Drive Standard",
-    "Direct Drive Standard"
-  ],
-  "default_nozzle_volume_type": [
-    "Standard",
-    "Standard"
-  ],
   "extruder_printable_height": [
     "0",
     "0"
