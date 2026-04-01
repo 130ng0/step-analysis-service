@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 
+class ProfileLoaderError(Exception):
+    pass
+
+
 def select_profile_set(material_profile: str, support_material_type: str | None = None) -> dict[str, str]:
     material = (material_profile or "").strip().lower()
     support = (support_material_type or "").strip().lower()
 
-    # aktuell kein echtes Dual/IDEX mehr:
-    # Support wird über denselben Extruder gerechnet
+    # Aktuell kein echtes Dual/IDEX mehr:
+    # Support wird über denselben Extruder gerechnet.
     _ = support
 
     machine_06 = "EL-140V3_0.6"
@@ -27,6 +31,11 @@ def select_profile_set(material_profile: str, support_material_type: str | None 
         "pc_pro": "PC_PRO_0.6mm",
         "pc-cf": "PC-CF_PRO_0.6mm",
         "pc_cf": "PC-CF_PRO_0.6mm",
+        "hips": "SUPP_HIPS_0.6mm",
+        "supp_hips": "SUPP_HIPS_0.6mm",
+        "nevo_soluble": "SUPP_NEVO_SOLUBLE_0.6mm",
+        "soluble": "SUPP_NEVO_SOLUBLE_0.6mm",
+        "supp_nevo_soluble": "SUPP_NEVO_SOLUBLE_0.6mm",
     }
 
     filament_map_04 = {
@@ -50,4 +59,4 @@ def select_profile_set(material_profile: str, support_material_type: str | None 
             "filament": filament_map_06[material],
         }
 
-    raise ValueError(f"Unsupported material_profile: {material_profile}")
+    raise ProfileLoaderError(f"Unsupported material_profile: {material_profile}")
