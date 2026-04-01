@@ -54,37 +54,9 @@ def find_profile_file(profile_name: str, candidates: list[pathlib.Path]) -> path
     raise FileNotFoundError(f"Profile not found: {profile_name}")
 
 
-def merge_dicts(parent: dict[str, Any], child: dict[str, Any]) -> dict[str, Any]:
-    merged = dict(parent)
-    for k, v in child.items():
-        if k == "inherits":
-            continue
-        merged[k] = v
-    return merged
-
-
-def resolve_profile(
-    profile_name: str,
-    candidates: list[pathlib.Path],
-    seen: set[str] | None = None,
-) -> dict[str, Any]:
-    if seen is None:
-        seen = set()
-
-    key = normalize_name(profile_name)
-    if key in seen:
-        raise RuntimeError(f"Circular inheritance detected: {profile_name}")
-    seen.add(key)
-
+def resolve_profile(profile_name: str, candidates: list[pathlib.Path]) -> dict[str, Any]:
     path = find_profile_file(profile_name, candidates)
-    data = load_json(path)
-
-    parent_name = data.get("inherits")
-    if parent_name:
-        parent = resolve_profile(parent_name, candidates, seen)
-        return merge_dicts(parent, data)
-
-    return data
+    return load_json(path)
 
 
 def _as_list(value: Any) -> list[Any]:
@@ -181,7 +153,6 @@ def patch_filament_for_printer(filament: dict[str, Any], printer: dict[str, Any]
         else:
             patched["supported_nozzle_diameters"] = [str(nozzle)]
 
-    # Alle Listen auf Extruderanzahl bringen
     for key, value in list(patched.items()):
         if isinstance(value, list):
             patched[key] = _repeat_last(value, extruder_count)
