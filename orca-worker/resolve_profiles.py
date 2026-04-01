@@ -8,7 +8,7 @@ from typing import Any
 
 USER_BASE = pathlib.Path("/workspace/profiles")
 ORCA_RESOURCES = pathlib.Path("/opt/orca/squashfs-root/resources")
-OUT_BASE = pathlib.Path("/workspace/debug-last")
+OUT_BASE = pathlib.Path("/tmp/orca-resolved")
 
 
 class ResolveProfilesError(Exception):
@@ -185,7 +185,7 @@ def resolve_profile_set(
     machine_name: str,
     process_name: str,
     filament_name: str,
-    output_name: str = "debug-last",
+    output_name: str = "resolved",
     infill_percent: float | None = None,
     perimeter_count: int | None = None,
     top_layers: int | None = None,
@@ -226,7 +226,7 @@ def resolve_profile_set(
         bottom_layers=bottom_layers,
     )
 
-    out_dir = out_base if out_base.name == output_name else (out_base / output_name)
+    out_dir = out_base / output_name
     write_json(out_dir / "printer.json", machine)
     write_json(out_dir / "process.json", process)
     write_json(out_dir / "filament.json", filament)

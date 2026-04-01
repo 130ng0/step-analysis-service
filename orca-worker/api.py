@@ -3,9 +3,9 @@ from __future__ import annotations
 import math
 import os
 import re
-import shutil
 import subprocess
 import tempfile
+import shutil
 from pathlib import Path
 from typing import Dict, List, Literal
 
@@ -120,32 +120,30 @@ def run_orca_with_profiles(
 ) -> Dict:
     selected = select_profile_set(material_profile, support_material_type)
 
-    with tempfile.TemporaryDirectory() as tmpdir:
-        output_dir = Path(tmpdir) / "out"
+    tmpdir = tempfile.mkdtemp(prefix="orca-run-")
+    tmpdir_path = Path(tmpdir)
+    output_dir = tmpdir_path / "out"
+    profiles_dir = tmpdir_path / "profiles"
+
+    try:
         output_dir.mkdir(parents=True, exist_ok=True)
+        profiles_dir.mkdir(parents=True, exist_ok=True)
 
         resolved_dir = resolve_profile_set(
             machine_name=selected["machine"],
             process_name=selected["process"],
             filament_name=selected["filament"],
-            output_name="last-run",
+            output_name="profiles",
             infill_percent=infill_percent,
             perimeter_count=perimeter_count,
             top_layers=top_layers,
             bottom_layers=bottom_layers,
+            out_base=tmpdir_path,
         )
 
         printer_path = resolved_dir / "printer.json"
         process_path = resolved_dir / "process.json"
         filament_path = resolved_dir / "filament.json"
-
-        debug_dir = Path("/workspace/debug-last")
-        if debug_dir.exists():
-            shutil.rmtree(debug_dir)
-        debug_dir.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(printer_path, debug_dir / "printer.json")
-        shutil.copy2(process_path, debug_dir / "process.json")
-        shutil.copy2(filament_path, debug_dir / "filament.json")
 
         cmd = [
             ORCA_PATH,
@@ -164,14 +162,26 @@ def run_orca_with_profiles(
 
         if proc.returncode != 0:
             raise OrcaSliceError(
-                f"Orca failed with code {proc.returncode}\nSTDOUT:\n{proc.stdout}\nSTDERR:\n{proc.stderr}"
+                f"Orca failed with code {proc.returncode}\n"
+                f"Temp dir kept at: {tmpdir}\n"
+                f"STDOUT:\n{proc.stdout}\n"
+                f"STDERR:\n{proc.stderr}"
             )
 
         gcode_path = output_dir / "plate_1.gcode"
         if not gcode_path.exists():
-            raise OrcaSliceError("plate_1.gcode was not generated")
+            raise OrcaSliceError(f"plate_1.gcode was not generated\nTemp dir kept at: {tmpdir}")
 
-        return parse_gcode(str(gcode_path))
+        result = parse_gcode(str(gcode_path))
+
+        # Nur bei Erfolg aufräumen
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+        return result
+
+    except Exception:
+        # Bei Fehler absichtlich NICHT löschen
+        raise
 
 
 def _split_csv_header_values(raw: str) -> List[str]:
