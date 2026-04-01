@@ -1,6 +1,6 @@
 {
   "type": "machine",
-  "name": "EL-140V3 0.6",
+  "name": "EL-140V3 v.2.0",
   "from": "system",
   "instantiation": "true",
   "printer_technology": "FFF",
@@ -57,6 +57,7 @@
 
   "printer_model": "Generic Marlin Printer",
   "setting_id": "GM001",
+  "printer_settings_id": "EL-140V3 v.2.0",
 
   "version": "2.0.2.0",
   "is_custom_defined": "0"
