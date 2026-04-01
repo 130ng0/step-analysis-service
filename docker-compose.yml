@@ -9,7 +9,7 @@ services:
       - "5050:8080"
     environment:
       STEP_SERVICE_API_KEY: "${STEP_SERVICE_API_KEY}"
-      MAX_FILE_SIZE_MB: "100"
+      MAX_FILE_SIZE_MB: "${MAX_FILE_SIZE_MB}"
       ORCA_WORKER_URL: "http://orca-worker:8090"
       ORCA_WORKER_TIMEOUT: "1800"
     depends_on:
@@ -21,3 +21,5 @@ services:
       dockerfile: orca-worker/Dockerfile
     container_name: orca-worker
     restart: unless-stopped
+    environment:
+      KEEP_TMP: "${KEEP_TMP_ORCA}"

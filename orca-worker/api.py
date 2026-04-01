@@ -17,7 +17,7 @@ from resolve_profiles import ResolveProfilesError, resolve_profile_set
 
 app = FastAPI(title="Orca Worker API", version="2.3.0")
 
-KEEP_TMP = True  # ← jetzt aktivieren
+KEEP_TMP = os.getenv("KEEP_TMP", "false").lower() == "true"
 ORCA_PATH = "/opt/orca/squashfs-root/AppRun"
 FILAMENT_DIAMETER_MM_DEFAULT = 1.75
 
