@@ -109,6 +109,43 @@ async def slice_model(
             except Exception:
                 pass
 
+def load_filament_metadata(filament_json_path: Path) -> Dict:
+    import json
+
+    with open(filament_json_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    def first_number(key: str):
+        value = data.get(key)
+        if isinstance(value, list) and value:
+            try:
+                return float(str(value[0]).replace(",", "."))
+            except Exception:
+                return None
+        if value is not None:
+            try:
+                return float(str(value).replace(",", "."))
+            except Exception:
+                return None
+        return None
+
+    def first_text(key: str):
+        value = data.get(key)
+        if isinstance(value, list) and value:
+            return str(value[0])
+        if value is not None:
+            return str(value)
+        return None
+
+    return {
+        "filament_density_g_cm3": first_number("filament_density"),
+        "filament_diameter_mm": first_number("filament_diameter"),
+        "filament_cost_eur_per_kg": first_number("filament_cost"),
+        "filament_type": first_text("filament_type"),
+        "filament_settings_id": first_text("filament_settings_id"),
+        "filament_vendor": first_text("filament_vendor"),
+    }
+
 
 def run_orca_with_profiles(
     stl_path: str,
@@ -146,6 +183,8 @@ def run_orca_with_profiles(
         process_path = resolved_dir / "process.json"
         filament_path = resolved_dir / "filament.json"
 
+        filament_metadata = load_filament_metadata(filament_path)
+
         cmd = [
             ORCA_PATH,
             "--load-settings", f"{printer_path};{process_path}",
@@ -173,9 +212,12 @@ def run_orca_with_profiles(
         if not gcode_path.exists():
             raise OrcaSliceError(f"plate_1.gcode was not generated\nTemp dir kept at: {tmpdir}")
 
-        result = parse_gcode(str(gcode_path))
+        result = parse_gcode(
+            str(gcode_path),
+            filament_metadata=filament_metadata,
+        )
 
-        # Nur löschen wenn nicht debug und erfolg
+        # Nur bei Erfolg aufräumen? Falls du tmp behalten willst, auskommentieren:
         if not KEEP_TMP:
             shutil.rmtree(tmpdir, ignore_errors=True)
         else:
@@ -202,97 +244,191 @@ def _parse_header_list(raw: str, cast=float) -> List:
     return values
 
 
-def parse_gcode(gcode_path: str) -> Dict:
-    current_tool = 0
-    extrusion_per_tool_mm: Dict[int, float] = {}
+def parse_gcode(gcode_path: str, filament_metadata: Dict | None = None) -> Dict:
+    filament_metadata = filament_metadata or {}
+
+    current_role = "unknown"
+
+    total_filament_mm = None
+    total_filament_cm3 = None
+    total_weight_g_from_header = None
+    total_cost_from_header = None
     print_time_min = None
 
-    filament_density_list: List[float] = []
-    filament_diameter_list: List[float] = []
-    filament_type_list: List[str] = []
-    filament_cost_list: List[float] = []
+    gcode_filament_density = None
+    gcode_filament_diameter = None
+    gcode_filament_cost_per_kg = None
+    gcode_filament_type = None
+
+    extrusion_by_role_mm: Dict[str, float] = {}
 
     with open(gcode_path, "r", encoding="utf-8", errors="ignore") as f:
         for line in f:
             s = line.strip()
 
-            if s.startswith("; filament_density:"):
-                raw = s.split(":", 1)[1].strip()
-                filament_density_list = _parse_header_list(raw, float)
+            # ---- Direct summary headers ----
+            if s.startswith("; filament used [mm] ="):
+                try:
+                    total_filament_mm = float(s.split("=", 1)[1].strip())
+                except Exception:
+                    pass
 
-            elif s.startswith("; filament_diameter:"):
-                raw = s.split(":", 1)[1].strip()
-                filament_diameter_list = _parse_header_list(raw, float)
+            elif s.startswith("; filament used [cm3] ="):
+                try:
+                    total_filament_cm3 = float(s.split("=", 1)[1].strip())
+                except Exception:
+                    pass
 
-            elif s.startswith("; filament_cost ="):
-                raw = s.split("=", 1)[1].strip()
-                filament_cost_list = _parse_header_list(raw, float)
+            elif s.startswith("; total filament used [g] ="):
+                try:
+                    total_weight_g_from_header = float(s.split("=", 1)[1].strip())
+                except Exception:
+                    pass
 
-            elif s.startswith("; filament_type ="):
-                raw = s.split("=", 1)[1].strip()
-                filament_type_list = _split_csv_header_values(raw)
+            elif s.startswith("; total filament cost ="):
+                try:
+                    total_cost_from_header = float(s.split("=", 1)[1].strip())
+                except Exception:
+                    pass
 
             elif s.startswith("; estimated printing time (normal mode) ="):
                 raw = s.split("=", 1)[1].strip()
                 print_time_min = _parse_time_to_minutes(raw)
 
-            elif re.match(r"^T\d+$", s):
+            # ---- Material properties from GCode ----
+            elif s.startswith("; filament_density ="):
                 try:
-                    current_tool = int(s[1:])
+                    value = float(s.split("=", 1)[1].strip().strip('"'))
+                    if value > 0:
+                        gcode_filament_density = value
                 except Exception:
                     pass
+
+            elif s.startswith("; filament_diameter ="):
+                try:
+                    value = float(s.split("=", 1)[1].strip().strip('"'))
+                    if value > 0:
+                        gcode_filament_diameter = value
+                except Exception:
+                    pass
+
+            elif s.startswith("; filament_cost ="):
+                try:
+                    value = float(s.split("=", 1)[1].strip().strip('"'))
+                    if value > 0:
+                        gcode_filament_cost_per_kg = value
+                except Exception:
+                    pass
+
+            elif s.startswith("; filament_type ="):
+                gcode_filament_type = s.split("=", 1)[1].strip().strip('"')
+
+            # ---- TYPE-based extrusion split ----
+            elif s.startswith(";TYPE:"):
+                current_role = s.split(":", 1)[1].strip()
 
             elif s.startswith("G1") and " E" in s:
                 m = re.search(r"(?:^|\s)E(-?\d+(?:\.\d+)?)", s)
                 if m:
-                    delta_e = float(m.group(1))
+                    try:
+                        delta_e = float(m.group(1))
+                    except Exception:
+                        delta_e = 0.0
+
                     if delta_e > 0:
-                        extrusion_per_tool_mm[current_tool] = extrusion_per_tool_mm.get(current_tool, 0.0) + delta_e
+                        extrusion_by_role_mm[current_role] = extrusion_by_role_mm.get(current_role, 0.0) + delta_e
 
-    total_weight_g = 0.0
-    total_cost = 0.0
-    filament_usage = []
+    # ---- Fallback length from extrusion if header missing ----
+    if total_filament_mm is None:
+        total_filament_mm = sum(extrusion_by_role_mm.values())
 
-    for tool_index in sorted(extrusion_per_tool_mm.keys()):
-        extruded_len_mm = extrusion_per_tool_mm[tool_index]
-        diameter_mm = (
-            filament_diameter_list[tool_index]
-            if tool_index < len(filament_diameter_list)
-            else FILAMENT_DIAMETER_MM_DEFAULT
-        )
-        density_g_cm3 = filament_density_list[tool_index] if tool_index < len(filament_density_list) else None
-        cost_per_kg = filament_cost_list[tool_index] if tool_index < len(filament_cost_list) else None
-        material_name = filament_type_list[tool_index] if tool_index < len(filament_type_list) else f"tool_{tool_index}"
+    # ---- Use metadata from filament JSON first, then GCode ----
+    density_g_cm3 = filament_metadata.get("filament_density_g_cm3") or gcode_filament_density
+    diameter_mm = filament_metadata.get("filament_diameter_mm") or gcode_filament_diameter or FILAMENT_DIAMETER_MM_DEFAULT
+    cost_per_kg = filament_metadata.get("filament_cost_eur_per_kg") or gcode_filament_cost_per_kg
+    material_name = (
+        filament_metadata.get("filament_type")
+        or filament_metadata.get("filament_settings_id")
+        or gcode_filament_type
+        or "unknown"
+    )
 
+    # ---- Fallback volume from filament geometry if header missing ----
+    if total_filament_cm3 is None and total_filament_mm is not None:
         radius_cm = (diameter_mm / 10.0) / 2.0
-        length_cm = extruded_len_mm / 10.0
-        volume_cm3 = math.pi * (radius_cm ** 2) * length_cm
-        weight_g = volume_cm3 * density_g_cm3 if density_g_cm3 is not None else None
-        cost = (weight_g / 1000.0) * cost_per_kg if (weight_g is not None and cost_per_kg is not None) else None
+        length_cm = total_filament_mm / 10.0
+        total_filament_cm3 = math.pi * (radius_cm ** 2) * length_cm
 
-        if weight_g is not None:
-            total_weight_g += weight_g
-        if cost is not None:
-            total_cost += cost
+    # ---- Weight ----
+    total_weight_g = None
+    if total_weight_g_from_header is not None and total_weight_g_from_header > 0:
+        total_weight_g = total_weight_g_from_header
+    elif total_filament_cm3 is not None and density_g_cm3 is not None and density_g_cm3 > 0:
+        total_weight_g = total_filament_cm3 * density_g_cm3
 
-        filament_usage.append(
-            {
-                "tool": tool_index,
-                "material": material_name,
-                "extruded_length_mm": round(extruded_len_mm, 2),
-                "estimated_weight_g": round(weight_g, 2) if weight_g is not None else None,
-                "estimated_cost": round(cost, 2) if cost is not None else None,
-            }
-        )
+    # ---- Cost ----
+    total_cost = None
+    if total_cost_from_header is not None and total_cost_from_header > 0:
+        total_cost = total_cost_from_header
+    elif total_weight_g is not None and cost_per_kg is not None and cost_per_kg > 0:
+        total_cost = (total_weight_g / 1000.0) * cost_per_kg
+
+    # ---- Support split ----
+    support_mm = (
+        extrusion_by_role_mm.get("Support", 0.0)
+        + extrusion_by_role_mm.get("Support interface", 0.0)
+    )
+    model_mm = (total_filament_mm or 0.0) - support_mm
+
+    # grobe Volumen-/Gewichtstrennung proportional nach Länge
+    support_cm3 = None
+    model_cm3 = None
+    support_g = None
+    model_g = None
+
+    if total_filament_mm and total_filament_mm > 0 and total_filament_cm3 is not None:
+        support_ratio = support_mm / total_filament_mm
+        model_ratio = model_mm / total_filament_mm
+        support_cm3 = total_filament_cm3 * support_ratio
+        model_cm3 = total_filament_cm3 * model_ratio
+
+        if total_weight_g is not None:
+            support_g = total_weight_g * support_ratio
+            model_g = total_weight_g * model_ratio
 
     return {
         "estimated_print_time_min": print_time_min,
-        "estimated_total_filament_g": round(total_weight_g, 2) if total_weight_g > 0 else None,
-        "estimated_total_cost": round(total_cost, 2) if total_cost > 0 else None,
-        "filament_usage_by_tool": filament_usage,
+        "estimated_total_filament_mm": round(total_filament_mm, 2) if total_filament_mm is not None else None,
+        "estimated_total_filament_cm3": round(total_filament_cm3, 2) if total_filament_cm3 is not None else None,
+        "estimated_total_filament_g": round(total_weight_g, 2) if total_weight_g is not None else None,
+        "estimated_total_cost": round(total_cost, 2) if total_cost is not None else None,
+
+        "estimated_model_filament_mm": round(model_mm, 2),
+        "estimated_support_filament_mm": round(support_mm, 2),
+        "estimated_model_filament_cm3": round(model_cm3, 2) if model_cm3 is not None else None,
+        "estimated_support_filament_cm3": round(support_cm3, 2) if support_cm3 is not None else None,
+        "estimated_model_filament_g": round(model_g, 2) if model_g is not None else None,
+        "estimated_support_filament_g": round(support_g, 2) if support_g is not None else None,
+
+        "filament_usage_by_tool": [
+            {
+                "tool": 0,
+                "material": material_name,
+                "extruded_length_mm": round(total_filament_mm, 2) if total_filament_mm is not None else None,
+                "estimated_volume_cm3": round(total_filament_cm3, 2) if total_filament_cm3 is not None else None,
+                "estimated_weight_g": round(total_weight_g, 2) if total_weight_g is not None else None,
+                "estimated_cost": round(total_cost, 2) if total_cost is not None else None,
+            }
+        ],
+        "extrusion_by_role_mm": {k: round(v, 2) for k, v in extrusion_by_role_mm.items()},
+        "filament_metadata_used": {
+            "material": material_name,
+            "density_g_cm3": density_g_cm3,
+            "diameter_mm": diameter_mm,
+            "cost_eur_per_kg": cost_per_kg,
+        },
         "gcode_generated": True,
     }
-
 
 def _parse_time_to_minutes(raw: str) -> int | None:
     total = 0
