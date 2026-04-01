@@ -155,21 +155,11 @@ def patch_printer_for_process(printer: dict[str, Any], process: dict[str, Any]) 
     extruder_count = _infer_extruder_count(patched)
     target_nozzle = _infer_target_nozzle_from_process(process, patched)
 
-    # Nur die Nozzle/Variant gezielt anpassen.
+    # Nozzle und Variant auf Zielprozess anpassen
     patched["nozzle_diameter"] = [target_nozzle] * extruder_count
+    patched["printer_variant"] = target_nozzle
 
-    if "printer_variant" in patched or "printer_model" in patched:
-        patched["printer_variant"] = target_nozzle
-
-    # Falls Orca-Export diese Felder schon enthält, konsistent halten.
-    if "supported_nozzle_diameters" in patched:
-        patched["supported_nozzle_diameters"] = [target_nozzle] * extruder_count
-
-    if "default_nozzle_diameter" in patched:
-        patched["default_nozzle_diameter"] = target_nozzle
-
-    # Bereits exportierte Multi-Extruder-Felder auf korrekte Länge bringen,
-    # aber keine neuen Orca-internen Felder erfinden.
+    # Felder, die bei Multi-Extruder dieselbe Länge haben müssen
     for key in (
         "extruder_colour",
         "extruder_offset",
@@ -214,44 +204,57 @@ def patch_printer_for_process(printer: dict[str, Any], process: dict[str, Any]) 
         "min_layer_height",
         "travel_slope",
         "nozzle_type",
-        "nozzle_volume",
         "nozzle_flush_dataset",
         "extruder_printable_height",
+        "machine_max_acceleration_travel",
     ):
         if key in patched and isinstance(patched[key], list):
             patched[key] = _repeat_last(patched[key], extruder_count)
 
-    # Kritisch für IDEX: physisches Extruder-Mapping muss zur Extruderanzahl passen.
-    if extruder_count == 1:
-        patched["physical_extruder_map"] = ["0"]
-    else:
-        patched["physical_extruder_map"] = [str(i) for i in range(extruder_count)]
-
-    # Falls vorhanden, auf richtige Länge bringen
-    if "default_nozzle_volume_type" in patched and isinstance(patched["default_nozzle_volume_type"], list):
-        patched["default_nozzle_volume_type"] = _repeat_last(
-            patched["default_nozzle_volume_type"], extruder_count
-        )
-
-    if "nozzle_volume" in patched and isinstance(patched["nozzle_volume"], list):
-        patched["nozzle_volume"] = _repeat_last(patched["nozzle_volume"], extruder_count)
-
-    # Falls Orca die Felder erwartet, aber sie im Export fehlen, nur minimal ergänzen.
+    # Falls aus Export nur Single-Extruder-Werte kommen, sinnvoll ergänzen
     if "extruder_type" not in patched:
         patched["extruder_type"] = ["Direct Drive"] * extruder_count
+    else:
+        patched["extruder_type"] = _repeat_last(_as_list(patched["extruder_type"]), extruder_count)
 
     if "extruder_variant_list" not in patched:
         patched["extruder_variant_list"] = ["Direct Drive Standard"] * extruder_count
+    else:
+        patched["extruder_variant_list"] = _repeat_last(_as_list(patched["extruder_variant_list"]), extruder_count)
 
     if "printer_extruder_variant" not in patched:
         patched["printer_extruder_variant"] = ["Direct Drive Standard"] * extruder_count
+    else:
+        patched["printer_extruder_variant"] = _repeat_last(_as_list(patched["printer_extruder_variant"]), extruder_count)
 
     if "default_nozzle_volume_type" not in patched:
         patched["default_nozzle_volume_type"] = ["Standard"] * extruder_count
+    else:
+        patched["default_nozzle_volume_type"] = _repeat_last(
+            _as_list(patched["default_nozzle_volume_type"]), extruder_count
+        )
 
-    # Nur wenn das Feld fehlt, minimal sinnvoll ergänzen.
-    if "nozzle_volume" not in patched:
-        patched["nozzle_volume"] = ["Standard"] * extruder_count
+    # Kritisch: physisches Mapping muss bei 2 Extrudern auch 2 Einträge haben
+    patched["physical_extruder_map"] = [str(i) for i in range(extruder_count)]
+
+    # Drucker-Extruder-IDs sauber halten
+    patched["printer_extruder_id"] = [str(i + 1) for i in range(extruder_count)]
+
+    # Nozzle-Volume konsistent machen
+    if "nozzle_volume" in patched:
+        nozzle_volume = patched["nozzle_volume"]
+        if isinstance(nozzle_volume, list):
+            patched["nozzle_volume"] = _repeat_last(nozzle_volume, extruder_count)
+        else:
+            patched["nozzle_volume"] = [str(nozzle_volume)] * extruder_count
+    else:
+        patched["nozzle_volume"] = ["107"] * extruder_count
+
+    # Optionale Felder konsistent mit Zielnozzle halten
+    patched["supported_nozzle_diameters"] = [target_nozzle]
+
+    if "compatible_printers" in patched and isinstance(patched["compatible_printers"], list):
+        patched["compatible_printers"] = _repeat_last(patched["compatible_printers"], extruder_count)
 
     return patched
 
