@@ -415,6 +415,7 @@ def parse_gcode(gcode_path: str, filament_metadata: Dict | None = None) -> Dict:
         "gcode_generated": True,
     }
 
+
 def _parse_time_to_minutes(raw: str) -> int | None:
     total = 0
     matches = re.findall(r"(\d+)\s*([dhms])", raw.lower())
