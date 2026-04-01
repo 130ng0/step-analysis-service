@@ -17,6 +17,7 @@ from resolve_profiles import ResolveProfilesError, resolve_profile_set
 
 app = FastAPI(title="Orca Worker API", version="2.3.0")
 
+KEEP_TMP = True  # ← jetzt aktivieren
 ORCA_PATH = "/opt/orca/squashfs-root/AppRun"
 FILAMENT_DIAMETER_MM_DEFAULT = 1.75
 
@@ -174,8 +175,11 @@ def run_orca_with_profiles(
 
         result = parse_gcode(str(gcode_path))
 
-        # Nur bei Erfolg aufräumen
-        shutil.rmtree(tmpdir, ignore_errors=True)
+        # Nur löschen wenn nicht debug und erfolg
+        if not KEEP_TMP:
+            shutil.rmtree(tmpdir, ignore_errors=True)
+        else:
+            print(f"[DEBUG] tmp dir kept at: {tmpdir}")
 
         return result
 
