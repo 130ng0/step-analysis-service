@@ -35,7 +35,7 @@ def health():
 async def slice_model(
     file: UploadFile = File(...),
     material_profile: Literal["abs", "abs_cf", "abs_esd", "asa", "pc", "pc_cf", "pc_fr", "tpu"] = Form(default="abs"),
-    support_material_type: Literal["none", "breakaway"] = Form(default="none"),
+    support_material_type: Literal["none", "breakaway", "hips", "soluble"] = Form(default="none"),
     infill_percent: float = Form(default=20.0),
     perimeter_count: int = Form(default=5),
     top_layers: int = Form(default=5),
@@ -148,6 +148,46 @@ def load_filament_metadata(filament_json_path: Path) -> Dict:
     }
 
 
+def load_named_filament_metadata(profile_name: str) -> Dict:
+    profiles_root = Path("/workspace/profiles")
+
+    wanted = profile_name.strip().lower()
+
+    for path in profiles_root.rglob("*.json"):
+        if path.stem.strip().lower() == wanted:
+            return load_filament_metadata(path)
+
+        try:
+            import json
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if str(data.get("name", "")).strip().lower() == wanted:
+                return {
+                    "filament_density_g_cm3": (
+                        float(data["filament_density"][0]) if isinstance(data.get("filament_density"), list) and data["filament_density"] else None
+                    ),
+                    "filament_diameter_mm": (
+                        float(data["filament_diameter"][0]) if isinstance(data.get("filament_diameter"), list) and data["filament_diameter"] else None
+                    ),
+                    "filament_cost_eur_per_kg": (
+                        float(data["filament_cost"][0]) if isinstance(data.get("filament_cost"), list) and data["filament_cost"] else None
+                    ),
+                    "filament_type": (
+                        str(data["filament_type"][0]) if isinstance(data.get("filament_type"), list) and data["filament_type"] else None
+                    ),
+                    "filament_settings_id": (
+                        str(data["filament_settings_id"][0]) if isinstance(data.get("filament_settings_id"), list) and data["filament_settings_id"] else None
+                    ),
+                    "filament_vendor": (
+                        str(data["filament_vendor"][0]) if isinstance(data.get("filament_vendor"), list) and data["filament_vendor"] else None
+                    ),
+                }
+        except Exception:
+            pass
+
+    raise FileNotFoundError(f"Support pricing filament profile not found: {profile_name}")
+
+
 def run_orca_with_profiles(
     stl_path: str,
     material_profile: str,
@@ -173,6 +213,7 @@ def run_orca_with_profiles(
             process_name=selected["process"],
             filament_name=selected["filament"],
             output_name="profiles",
+            support_material_type=support_material_type,
             infill_percent=infill_percent,
             perimeter_count=perimeter_count,
             top_layers=top_layers,
@@ -185,6 +226,11 @@ def run_orca_with_profiles(
         filament_path = resolved_dir / "filament.json"
 
         filament_metadata = load_filament_metadata(filament_path)
+        support_filament_metadata = None
+        support_price_filament = selected.get("support_price_filament")
+
+        if support_price_filament:
+            support_filament_metadata = load_named_filament_metadata(str(support_price_filament))
 
         cmd = [
             ORCA_PATH,
@@ -216,6 +262,7 @@ def run_orca_with_profiles(
         result = parse_gcode(
             str(gcode_path),
             filament_metadata=filament_metadata,
+            support_filament_metadata=support_filament_metadata,
         )
 
         # Nur bei Erfolg aufräumen? Falls du tmp behalten willst, auskommentieren:
@@ -245,8 +292,13 @@ def _parse_header_list(raw: str, cast=float) -> List:
     return values
 
 
-def parse_gcode(gcode_path: str, filament_metadata: Dict | None = None) -> Dict:
+def parse_gcode(
+    gcode_path: str,
+    filament_metadata: Dict | None = None,
+    support_filament_metadata: Dict | None = None,
+) -> Dict:
     filament_metadata = filament_metadata or {}
+    support_filament_metadata = support_filament_metadata or filament_metadata
 
     current_role = "unknown"
 
@@ -339,32 +391,28 @@ def parse_gcode(gcode_path: str, filament_metadata: Dict | None = None) -> Dict:
     if total_filament_mm is None:
         total_filament_mm = sum(extrusion_by_role_mm.values())
 
-    density_g_cm3 = filament_metadata.get("filament_density_g_cm3") or gcode_filament_density
-    diameter_mm = filament_metadata.get("filament_diameter_mm") or gcode_filament_diameter or FILAMENT_DIAMETER_MM_DEFAULT
-    cost_per_kg = filament_metadata.get("filament_cost_eur_per_kg") or gcode_filament_cost_per_kg
-    material_name = (
+    model_density_g_cm3 = filament_metadata.get("filament_density_g_cm3") or gcode_filament_density
+    model_diameter_mm = filament_metadata.get("filament_diameter_mm") or gcode_filament_diameter or FILAMENT_DIAMETER_MM_DEFAULT
+    model_cost_per_kg = filament_metadata.get("filament_cost_eur_per_kg") or gcode_filament_cost_per_kg
+    model_material_name = (
         filament_metadata.get("filament_type")
         or filament_metadata.get("filament_settings_id")
         or gcode_filament_type
         or "unknown"
     )
 
+    support_density_g_cm3 = support_filament_metadata.get("filament_density_g_cm3") or model_density_g_cm3
+    support_cost_per_kg = support_filament_metadata.get("filament_cost_eur_per_kg") or model_cost_per_kg
+    support_material_name = (
+        support_filament_metadata.get("filament_type")
+        or support_filament_metadata.get("filament_settings_id")
+        or model_material_name
+    )
+
     if total_filament_cm3 is None and total_filament_mm is not None:
-        radius_cm = (diameter_mm / 10.0) / 2.0
+        radius_cm = (model_diameter_mm / 10.0) / 2.0
         length_cm = total_filament_mm / 10.0
         total_filament_cm3 = math.pi * (radius_cm ** 2) * length_cm
-
-    total_weight_g = None
-    if total_weight_g_from_header is not None and total_weight_g_from_header > 0:
-        total_weight_g = total_weight_g_from_header
-    elif total_filament_cm3 is not None and density_g_cm3 is not None and density_g_cm3 > 0:
-        total_weight_g = total_filament_cm3 * density_g_cm3
-
-    total_cost = None
-    if total_cost_from_header is not None and total_cost_from_header > 0:
-        total_cost = total_cost_from_header
-    elif total_weight_g is not None and cost_per_kg is not None and cost_per_kg > 0:
-        total_cost = (total_weight_g / 1000.0) * cost_per_kg
 
     support_mm = (
         extrusion_by_role_mm.get("Support", 0.0)
@@ -372,45 +420,63 @@ def parse_gcode(gcode_path: str, filament_metadata: Dict | None = None) -> Dict:
     )
     model_mm = (total_filament_mm or 0.0) - support_mm
 
-    support_cm3 = None
-    model_cm3 = None
-    support_g = None
-    model_g = None
-
+    support_cm3 = 0.0
+    model_cm3 = 0.0
     if total_filament_mm and total_filament_mm > 0 and total_filament_cm3 is not None:
         support_ratio = support_mm / total_filament_mm
         model_ratio = model_mm / total_filament_mm
         support_cm3 = total_filament_cm3 * support_ratio
         model_cm3 = total_filament_cm3 * model_ratio
 
-        if total_weight_g is not None:
-            support_g = total_weight_g * support_ratio
-            model_g = total_weight_g * model_ratio
+    model_g = model_cm3 * model_density_g_cm3 if (model_cm3 and model_density_g_cm3) else 0.0
+    support_g = support_cm3 * support_density_g_cm3 if (support_cm3 and support_density_g_cm3) else 0.0
+
+    model_cost = (model_g / 1000.0) * model_cost_per_kg if (model_g and model_cost_per_kg) else 0.0
+    support_cost = (support_g / 1000.0) * support_cost_per_kg if (support_g and support_cost_per_kg) else 0.0
+
+    total_weight_g = model_g + support_g
+    total_cost = model_cost + support_cost
 
     tools = [
         {
             "tool": 0,
-            "material": material_name,
-            "filament_length_mm": round(total_filament_mm, 2) if total_filament_mm is not None else 0,
-            "filament_volume_cm3": round(total_filament_cm3, 3) if total_filament_cm3 is not None else 0,
-            "filament_weight_g": round(total_weight_g, 3) if total_weight_g is not None else 0,
-            "material_cost_eur": round(total_cost, 2) if total_cost is not None else 0,
+            "role": "model",
+            "material": model_material_name,
+            "filament_length_mm": round(model_mm, 2),
+            "filament_volume_cm3": round(model_cm3, 3),
+            "filament_weight_g": round(model_g, 3),
+            "material_cost_eur": round(model_cost, 2),
         }
     ]
+
+    if support_mm > 0:
+        tools.append(
+            {
+                "tool": 0,
+                "role": "support",
+                "material": support_material_name,
+                "filament_length_mm": round(support_mm, 2),
+                "filament_volume_cm3": round(support_cm3, 3),
+                "filament_weight_g": round(support_g, 3),
+                "material_cost_eur": round(support_cost, 2),
+            }
+        )
 
     return {
         "print_time_minutes": int(print_time_min or 0),
         "print_time_hours": round((print_time_min or 0) / 60.0, 4),
         "filament_length_mm_total": round(total_filament_mm, 3) if total_filament_mm is not None else 0,
         "filament_volume_cm3_total": round(total_filament_cm3, 3) if total_filament_cm3 is not None else 0,
-        "filament_weight_g_total": round(total_weight_g, 3) if total_weight_g is not None else 0,
-        "material_cost_eur_total": round(total_cost, 2) if total_cost is not None else 0,
+        "filament_weight_g_total": round(total_weight_g, 3),
+        "material_cost_eur_total": round(total_cost, 2),
         "model_filament_length_mm": round(model_mm, 3),
         "support_filament_length_mm": round(support_mm, 3),
-        "model_filament_volume_cm3": round(model_cm3, 3) if model_cm3 is not None else 0,
-        "support_filament_volume_cm3": round(support_cm3, 3) if support_cm3 is not None else 0,
-        "model_filament_weight_g": round(model_g, 3) if model_g is not None else 0,
-        "support_filament_weight_g": round(support_g, 3) if support_g is not None else 0,
+        "model_filament_volume_cm3": round(model_cm3, 3),
+        "support_filament_volume_cm3": round(support_cm3, 3),
+        "model_filament_weight_g": round(model_g, 3),
+        "support_filament_weight_g": round(support_g, 3),
+        "model_material_cost_eur": round(model_cost, 2),
+        "support_material_cost_eur": round(support_cost, 2),
         "tools": tools,
         "gcode_generated": True,
     }

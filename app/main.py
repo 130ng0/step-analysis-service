@@ -83,7 +83,7 @@ def health():
 async def analyze_model(
     file: UploadFile = File(...),
     material_profile: Literal["abs", "abs_cf", "abs_esd", "asa", "pc", "pc_cf", "pc_fr", "tpu"] = Form(default="abs"),
-    support_material_type: Literal["none", "breakaway"] = Form(default="breakaway"),
+    support_material_type: Literal["none", "breakaway", "hips", "soluble"] = Form(default="breakaway"),
     infill_percent: float = Form(default=20.0),
     perimeter_count: int = Form(default=5),
     top_layers: int = Form(default=5),
@@ -123,8 +123,8 @@ async def analyze_model(
     try:
         stl_bytes, stl_filename = convert_upload_to_stl_bytes(file_bytes, filename)
 
-        # Aktuell: nur breakaway oder kein support
-        worker_support_mode = "breakaway" if support_material_type == "breakaway" else "none"
+
+        worker_support_mode = support_material_type
 
         files = {
             "file": (stl_filename, stl_bytes, "application/octet-stream"),

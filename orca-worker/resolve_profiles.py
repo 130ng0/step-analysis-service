@@ -160,6 +160,22 @@ def patch_filament_for_printer(filament: dict[str, Any], printer: dict[str, Any]
     return patched
 
 
+def patch_process_for_support_mode(process: dict[str, Any], support_material_type: str | None) -> dict[str, Any]:
+    patched = dict(process)
+    support = (support_material_type or "none").strip().lower()
+
+    if support == "none":
+        patched["enable_support"] = "0"
+    else:
+        patched["enable_support"] = "1"
+
+    # Wir slicen Single-Extruder.
+    patched["support_filament"] = "0"
+    patched["support_interface_filament"] = "0"
+
+    return patched
+
+
 def apply_process_overrides(
     process: dict[str, Any],
     infill_percent: float | None = None,
@@ -186,6 +202,7 @@ def resolve_profile_set(
     process_name: str,
     filament_name: str,
     output_name: str = "resolved",
+    support_material_type: str | None = None,
     infill_percent: float | None = None,
     perimeter_count: int | None = None,
     top_layers: int | None = None,
@@ -218,6 +235,7 @@ def resolve_profile_set(
 
     process = patch_process_for_printer(process, machine)
     filament = patch_filament_for_printer(filament, machine)
+    process = patch_process_for_support_mode(process, support_material_type)
     process = apply_process_overrides(
         process,
         infill_percent=infill_percent,
