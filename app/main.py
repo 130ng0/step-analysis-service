@@ -14,6 +14,7 @@ from app.config import ALLOWED_EXTENSIONS, MAX_FILE_SIZE_BYTES
 from app.schemas import ErrorResponse
 from app.security import verify_api_key
 from app.services.slice_input_converter import SliceInputConversionError, convert_upload_to_stl_bytes
+from app.services.model_analysis import render_preview_from_converted_stl_bytes
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("step-analysis-service")
@@ -129,6 +130,7 @@ async def analyze_model(
 
     try:
         stl_bytes, stl_filename = convert_upload_to_stl_bytes(file_bytes, filename)
+        preview_png_base64 = render_preview_from_converted_stl_bytes(stl_bytes)
 
         worker_support_mode = support_material_type
 
@@ -219,6 +221,7 @@ async def analyze_model(
 
             "applied_slicer_settings": payload.get("applied_slicer_settings", {}),
             "tools": payload.get("tools", []),
+            "preview_png_base64": preview_png_base64,
         }
 
     except SliceInputConversionError as exc:
