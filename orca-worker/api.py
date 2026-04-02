@@ -40,6 +40,12 @@ async def slice_model(
     perimeter_count: int = Form(default=5),
     top_layers: int = Form(default=5),
     bottom_layers: int = Form(default=5),
+    material_density_g_cm3: float = Form(default=0.0),
+    material_price_eur_per_kg: float = Form(default=0.0),
+    support_density_g_cm3: float = Form(default=0.0),
+    support_price_eur_per_kg: float = Form(default=0.0),
+    material_display_name: str = Form(default=""),
+    support_material_display_name: str = Form(default=""),
 ):
     filename = file.filename or "model.stl"
     suffix = os.path.splitext(filename)[1].lower()
@@ -65,6 +71,12 @@ async def slice_model(
             perimeter_count=perimeter_count,
             top_layers=top_layers,
             bottom_layers=bottom_layers,
+            material_density_g_cm3=material_density_g_cm3,
+            material_price_eur_per_kg=material_price_eur_per_kg,
+            support_density_g_cm3=support_density_g_cm3,
+            support_price_eur_per_kg=support_price_eur_per_kg,
+            material_display_name=material_display_name,
+            support_material_display_name=support_material_display_name,
         )
 
         return {
@@ -180,23 +192,6 @@ def load_filament_metadata(filament_json_path: Path) -> Dict:
         "filament_vendor": first_text("filament_vendor"),
     }
 
-    def first_text(key: str):
-        value = data.get(key)
-        if isinstance(value, list) and value:
-            return str(value[0])
-        if value is not None:
-            return str(value)
-        return None
-
-    return {
-        "filament_density_g_cm3": first_number("filament_density"),
-        "filament_diameter_mm": first_number("filament_diameter"),
-        "filament_cost_eur_per_kg": first_number("filament_cost"),
-        "filament_type": first_text("filament_type"),
-        "filament_settings_id": first_text("filament_settings_id"),
-        "filament_vendor": first_text("filament_vendor"),
-    }
-
 
 def load_named_filament_metadata(profile_name: str) -> Dict:
     profiles_root = Path("/workspace/profiles")
@@ -227,6 +222,12 @@ def run_orca_with_profiles(
     perimeter_count: int,
     top_layers: int,
     bottom_layers: int,
+    material_density_g_cm3: float,
+    material_price_eur_per_kg: float,
+    support_density_g_cm3: float,
+    support_price_eur_per_kg: float,
+    material_display_name: str,
+    support_material_display_name: str,
 ) -> Dict:
     selected = select_profile_set(material_profile, support_material_type)
 
@@ -257,7 +258,30 @@ def run_orca_with_profiles(
         filament_path = resolved_dir / "filament.json"
 
         filament_metadata = load_filament_metadata(filament_path)
+
+        if material_density_g_cm3 and material_density_g_cm3 > 0:
+            filament_metadata["filament_density_g_cm3"] = material_density_g_cm3
+
+        if material_price_eur_per_kg and material_price_eur_per_kg > 0:
+            filament_metadata["filament_cost_eur_per_kg"] = material_price_eur_per_kg
+
+        if material_display_name:
+            filament_metadata["filament_type"] = material_display_name
+
         support_filament_metadata = None
+
+        if support_filament_metadata is None:
+            support_filament_metadata = dict(filament_metadata)
+
+        if support_density_g_cm3 and support_density_g_cm3 > 0:
+            support_filament_metadata["filament_density_g_cm3"] = support_density_g_cm3
+
+        if support_price_eur_per_kg and support_price_eur_per_kg > 0:
+            support_filament_metadata["filament_cost_eur_per_kg"] = support_price_eur_per_kg
+
+        if support_material_display_name:
+            support_filament_metadata["filament_type"] = support_material_display_name
+
         support_price_filament = selected.get("support_price_filament")
 
         if support_price_filament:

@@ -81,15 +81,22 @@ def health():
     dependencies=[Depends(verify_api_key)],
 )
 async def analyze_model(
-    file: UploadFile = File(...),
-    material_profile: Literal["abs", "abs_cf", "abs_esd", "asa", "pc", "pc_cf", "pc_fr", "tpu"] = Form(default="abs"),
-    support_material_type: Literal["none", "breakaway", "hips", "soluble"] = Form(default="breakaway"),
-    infill_percent: float = Form(default=20.0),
-    perimeter_count: int = Form(default=5),
-    top_layers: int = Form(default=5),
-    bottom_layers: int = Form(default=5),
-    machine_hour_rate_eur: float = Form(default=8.0),
-    margin_factor: float = Form(default=1.0),
+        file: UploadFile = File(...),
+        material_profile: Literal["abs", "abs_cf", "abs_esd", "asa", "pc", "pc_cf", "pc_fr", "tpu"] = Form(
+            default="abs"),
+        support_material_type: Literal["none", "breakaway", "hips", "soluble"] = Form(default="breakaway"),
+        infill_percent: float = Form(default=20.0),
+        perimeter_count: int = Form(default=5),
+        top_layers: int = Form(default=5),
+        bottom_layers: int = Form(default=5),
+        machine_hour_rate_eur: float = Form(default=8.0),
+        margin_factor: float = Form(default=1.0),
+        material_density_g_cm3: float = Form(default=0.0),
+        material_price_eur_per_kg: float = Form(default=0.0),
+        support_density_g_cm3: float = Form(default=0.0),
+        support_price_eur_per_kg: float = Form(default=0.0),
+        material_display_name: str = Form(default=""),
+        support_material_display_name: str = Form(default=""),
 ):
     filename = file.filename or "model.step"
 
@@ -123,7 +130,6 @@ async def analyze_model(
     try:
         stl_bytes, stl_filename = convert_upload_to_stl_bytes(file_bytes, filename)
 
-
         worker_support_mode = support_material_type
 
         files = {
@@ -136,6 +142,13 @@ async def analyze_model(
             "perimeter_count": str(perimeter_count),
             "top_layers": str(top_layers),
             "bottom_layers": str(bottom_layers),
+
+            "material_density_g_cm3": str(material_density_g_cm3),
+            "material_price_eur_per_kg": str(material_price_eur_per_kg),
+            "support_density_g_cm3": str(support_density_g_cm3),
+            "support_price_eur_per_kg": str(support_price_eur_per_kg),
+            "material_display_name": material_display_name,
+            "support_material_display_name": support_material_display_name,
         }
 
         response = requests.post(
