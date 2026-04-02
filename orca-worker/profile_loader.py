@@ -5,13 +5,9 @@ class ProfileLoaderError(Exception):
     pass
 
 
-def select_profile_set(material_profile: str, support_material_type: str | None = None) -> dict[str, str]:
+def select_profile_set(material_profile: str, support_material_type: str | None = None) -> dict[str, str | None]:
     material = (material_profile or "").strip().lower()
     support = (support_material_type or "").strip().lower()
-
-    # Aktuell kein echtes Dual/IDEX mehr:
-    # Support wird über denselben Extruder gerechnet.
-    _ = support
 
     machine_06 = "EL-140V3_0.6"
     process_06 = "Standard_0.6mm"
@@ -31,11 +27,6 @@ def select_profile_set(material_profile: str, support_material_type: str | None 
         "pc_pro": "PC_PRO_0.6mm",
         "pc-cf": "PC-CF_PRO_0.6mm",
         "pc_cf": "PC-CF_PRO_0.6mm",
-        "hips": "SUPP_HIPS_0.6mm",
-        "supp_hips": "SUPP_HIPS_0.6mm",
-        "nevo_soluble": "SUPP_NEVO_SOLUBLE_0.6mm",
-        "soluble": "SUPP_NEVO_SOLUBLE_0.6mm",
-        "supp_nevo_soluble": "SUPP_NEVO_SOLUBLE_0.6mm",
     }
 
     filament_map_04 = {
@@ -45,11 +36,22 @@ def select_profile_set(material_profile: str, support_material_type: str | None 
         "tpu": "TPU_0.4mm",
     }
 
+    support_price_filament = None
+    if support == "hips":
+        support_price_filament = "SUPP_HIPS_0.6mm"
+    elif support == "soluble":
+        support_price_filament = "SUPP_NEVO_SOLUBLE_0.6mm"
+    elif support in ("none", "breakaway", ""):
+        support_price_filament = None
+    else:
+        raise ProfileLoaderError(f"Unsupported support_material_type: {support_material_type}")
+
     if material in filament_map_04:
         return {
             "machine": machine_04,
             "process": process_04,
             "filament": filament_map_04[material],
+            "support_price_filament": support_price_filament,
         }
 
     if material in filament_map_06:
@@ -57,6 +59,7 @@ def select_profile_set(material_profile: str, support_material_type: str | None 
             "machine": machine_06,
             "process": process_06,
             "filament": filament_map_06[material],
+            "support_price_filament": support_price_filament,
         }
 
     raise ProfileLoaderError(f"Unsupported material_profile: {material_profile}")
