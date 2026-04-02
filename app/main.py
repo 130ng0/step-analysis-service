@@ -173,6 +173,59 @@ async def create_analysis_job(
     }
 
 
+@app.get(
+    "/analyze-model/jobs/{job_id}",
+    response_model=None,
+    responses={401: {"model": ErrorResponse}, 404: {"model": ErrorResponse}},
+    dependencies=[Depends(verify_api_key)],
+)
+def get_analysis_job(job_id: str):
+    job = get_job(job_id)
+    if not job:
+        return JSONResponse(
+            status_code=404,
+            content={
+                "success": False,
+                "error": "JOB_NOT_FOUND",
+                "details": f"Job not found: {job_id}",
+            },
+        )
+
+    status = job["status"]
+
+    if status == "queued":
+        return {
+            "success": True,
+            "job_id": job_id,
+            "status": "queued",
+            "queue_position": get_queue_position(job_id),
+        }
+
+    if status == "processing":
+        return {
+            "success": True,
+            "job_id": job_id,
+            "status": "processing",
+        }
+
+    if status == "done":
+        result = job.get("result_json") or {}
+        return {
+            "success": True,
+            "job_id": job_id,
+            "status": "done",
+            "result": result,
+        }
+
+    return {
+        "success": False,
+        "job_id": job_id,
+        "status": "error",
+        "error": job.get("error_code") or "JOB_FAILED",
+        "details": job.get("error_details") or "Unknown job error",
+    }
+
+
 @app.delete(
     "/analyze-model/jobs/{job_id}",
     response_model=None,
