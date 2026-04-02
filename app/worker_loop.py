@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-from pathlib import Path
 
 from app.job_store import claim_next_job, get_job_dir, mark_done, mark_error
 from app.services.model_analysis import render_preview_from_converted_stl_bytes
@@ -10,7 +9,7 @@ from app.services.orca_client import OrcaClientError, slice_with_worker
 from app.services.slice_input_converter import SliceInputConversionError, convert_upload_to_stl_bytes
 
 
-async def process_job(job: dict) -> None:
+def process_job_sync(job: dict) -> None:
     job_id = job["job_id"]
     request_payload = job["request_json"]
     filename = job["filename"]
@@ -93,4 +92,4 @@ async def worker_loop(poll_seconds: float = 1.0) -> None:
             await asyncio.sleep(poll_seconds)
             continue
 
-        await process_job(job)
+        await asyncio.to_thread(process_job_sync, job)
