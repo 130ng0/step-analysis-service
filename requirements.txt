@@ -1,10 +1,12 @@
 fastapi==0.115.0
 uvicorn[standard]==0.30.6
 python-multipart==0.0.22
-numpy==1.26.4
+
+requests==2.32.5
+
 cadquery==2.4.0
 trimesh==4.4.9
-pydantic~=2.12.5
-requests~=2.32.5
-matplotlib==3.9.0
 numpy==1.26.4
+matplotlib==3.8.4
+
+pydantic==2.7.4

@@ -6,6 +6,7 @@ import time
 import uuid
 from typing import Literal
 
+import asyncio
 import requests
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse
@@ -15,6 +16,16 @@ from app.schemas import ErrorResponse
 from app.security import verify_api_key
 from app.services.slice_input_converter import SliceInputConversionError, convert_upload_to_stl_bytes
 from app.services.model_analysis import render_preview_from_converted_stl_bytes
+
+from app.job_store import (
+    create_job,
+    delete_job,
+    get_job,
+    get_queue_position,
+    init_db,
+    mark_consumed,
+)
+from app.worker_loop import worker_loop
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("step-analysis-service")
@@ -28,6 +39,12 @@ app = FastAPI(
 
 ORCA_WORKER_URL = os.getenv("ORCA_WORKER_URL", "http://orca-worker:8090")
 ORCA_WORKER_TIMEOUT = int(os.getenv("ORCA_WORKER_TIMEOUT", "1800"))
+
+
+@app.on_event("startup")
+async def startup_event():
+    init_db()
+    asyncio.create_task(worker_loop())
 
 
 @app.middleware("http")
@@ -72,6 +89,115 @@ def health():
     return {
         "status": "ok",
         "orca_worker": worker_status,
+    }
+
+
+@app.post(
+    "/analyze-model/jobs",
+    response_model=None,
+    responses={400: {"model": ErrorResponse}, 401: {"model": ErrorResponse}, 500: {"model": ErrorResponse}},
+    dependencies=[Depends(verify_api_key)],
+)
+async def create_analysis_job(
+    file: UploadFile = File(...),
+    material_profile: Literal["abs", "abs_cf", "abs_esd", "asa", "pc", "pc_cf", "pc_fr", "tpu"] = Form(default="abs"),
+    support_material_type: Literal["none", "breakaway", "hips", "soluble"] = Form(default="breakaway"),
+    infill_percent: float = Form(default=20.0),
+    perimeter_count: int = Form(default=5),
+    top_layers: int = Form(default=5),
+    bottom_layers: int = Form(default=5),
+    machine_hour_rate_eur: float = Form(default=8.0),
+    margin_factor: float = Form(default=1.0),
+    material_density_g_cm3: float = Form(default=0.0),
+    material_price_eur_per_kg: float = Form(default=0.0),
+    support_density_g_cm3: float = Form(default=0.0),
+    support_price_eur_per_kg: float = Form(default=0.0),
+    material_display_name: str = Form(default=""),
+    support_material_display_name: str = Form(default=""),
+):
+    filename = file.filename or "model.step"
+
+    if not filename.lower().endswith(ALLOWED_EXTENSIONS):
+        return JSONResponse(
+            status_code=400,
+            content={
+                "success": False,
+                "error": "UNSUPPORTED_FILE_FORMAT",
+                "details": f"Only {', '.join(ALLOWED_EXTENSIONS)} files are supported",
+                "filename": filename,
+            },
+        )
+
+    file_bytes = await file.read()
+    if not file_bytes:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty")
+
+    if len(file_bytes) > MAX_FILE_SIZE_BYTES:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "success": False,
+                "error": "FILE_TOO_LARGE",
+                "details": f"Maximum allowed size is {MAX_FILE_SIZE_BYTES // (1024 * 1024)} MB",
+                "filename": filename,
+            },
+        )
+
+    request_payload = {
+        "material_profile": material_profile,
+        "support_material_type": support_material_type,
+        "infill_percent": infill_percent,
+        "perimeter_count": perimeter_count,
+        "top_layers": top_layers,
+        "bottom_layers": bottom_layers,
+        "machine_hour_rate_eur": machine_hour_rate_eur,
+        "margin_factor": margin_factor,
+        "material_density_g_cm3": material_density_g_cm3,
+        "material_price_eur_per_kg": material_price_eur_per_kg,
+        "support_density_g_cm3": support_density_g_cm3,
+        "support_price_eur_per_kg": support_price_eur_per_kg,
+        "material_display_name": material_display_name,
+        "support_material_display_name": support_material_display_name,
+    }
+
+    job_id = create_job(
+        filename=filename,
+        request_payload=request_payload,
+        file_bytes=file_bytes,
+    )
+
+    return {
+        "success": True,
+        "job_id": job_id,
+        "status": "queued",
+    }
+
+
+@app.delete(
+    "/analyze-model/jobs/{job_id}",
+    response_model=None,
+    responses={401: {"model": ErrorResponse}, 404: {"model": ErrorResponse}},
+    dependencies=[Depends(verify_api_key)],
+)
+def delete_analysis_job(job_id: str):
+    job = get_job(job_id)
+    if not job:
+        return JSONResponse(
+            status_code=404,
+            content={
+                "success": False,
+                "error": "JOB_NOT_FOUND",
+                "details": f"Job not found: {job_id}",
+            },
+        )
+
+    mark_consumed(job_id)
+    deleted = delete_job(job_id)
+
+    return {
+        "success": True,
+        "job_id": job_id,
+        "deleted": bool(deleted),
     }
 
 
