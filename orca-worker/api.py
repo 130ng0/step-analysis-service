@@ -138,6 +138,56 @@ def load_filament_metadata(filament_json_path: Path) -> Dict:
             return str(value)
         return None
 
+    filament_type = first_text("filament_type")
+    filament_settings_id = first_text("filament_settings_id")
+
+    density = first_number("filament_density")
+    diameter = first_number("filament_diameter")
+    cost = first_number("filament_cost")
+
+    # Fallback-Dichten, falls im Profil nichts gepflegt ist
+    density_fallback_map = {
+        "ABS": 1.04,
+        "ABS PRO": 1.04,
+        "ABS-CF": 1.10,
+        "ABS-CF PRO": 1.10,
+        "ABS-ESD": 1.08,
+        "ABS-ESD PRO": 1.08,
+        "ASA": 1.07,
+        "ASA PRO": 1.07,
+        "PC": 1.20,
+        "PC PRO": 1.20,
+        "PC-CF": 1.18,
+        "PC-CF PRO": 1.18,
+        "PC-FR": 1.20,
+        "TPU": 1.21,
+        "HIPS": 1.03,
+        "NEVO SOLUBLE": 1.20,
+    }
+
+    if (density is None or density <= 0) and filament_type:
+        density = density_fallback_map.get(filament_type.strip().upper())
+
+    if diameter is None or diameter <= 0:
+        diameter = FILAMENT_DIAMETER_MM_DEFAULT
+
+    return {
+        "filament_density_g_cm3": density,
+        "filament_diameter_mm": diameter,
+        "filament_cost_eur_per_kg": cost,
+        "filament_type": filament_type,
+        "filament_settings_id": filament_settings_id,
+        "filament_vendor": first_text("filament_vendor"),
+    }
+
+    def first_text(key: str):
+        value = data.get(key)
+        if isinstance(value, list) and value:
+            return str(value[0])
+        if value is not None:
+            return str(value)
+        return None
+
     return {
         "filament_density_g_cm3": first_number("filament_density"),
         "filament_diameter_mm": first_number("filament_diameter"),
@@ -162,26 +212,7 @@ def load_named_filament_metadata(profile_name: str) -> Dict:
             with open(path, "r", encoding="utf-8") as f:
                 data = json.load(f)
             if str(data.get("name", "")).strip().lower() == wanted:
-                return {
-                    "filament_density_g_cm3": (
-                        float(data["filament_density"][0]) if isinstance(data.get("filament_density"), list) and data["filament_density"] else None
-                    ),
-                    "filament_diameter_mm": (
-                        float(data["filament_diameter"][0]) if isinstance(data.get("filament_diameter"), list) and data["filament_diameter"] else None
-                    ),
-                    "filament_cost_eur_per_kg": (
-                        float(data["filament_cost"][0]) if isinstance(data.get("filament_cost"), list) and data["filament_cost"] else None
-                    ),
-                    "filament_type": (
-                        str(data["filament_type"][0]) if isinstance(data.get("filament_type"), list) and data["filament_type"] else None
-                    ),
-                    "filament_settings_id": (
-                        str(data["filament_settings_id"][0]) if isinstance(data.get("filament_settings_id"), list) and data["filament_settings_id"] else None
-                    ),
-                    "filament_vendor": (
-                        str(data["filament_vendor"][0]) if isinstance(data.get("filament_vendor"), list) and data["filament_vendor"] else None
-                    ),
-                }
+                return load_filament_metadata(path)
         except Exception:
             pass
 

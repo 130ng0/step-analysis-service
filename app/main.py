@@ -194,6 +194,16 @@ async def analyze_model(
             "machine_cost_eur": machine_cost_eur,
             "subtotal_cost_eur": subtotal_cost_eur,
             "total_price_eur": total_price_eur,
+
+            "model_filament_length_mm": round(float(payload.get("model_filament_length_mm", 0) or 0), 3),
+            "support_filament_length_mm": round(float(payload.get("support_filament_length_mm", 0) or 0), 3),
+            "model_filament_volume_cm3": round(float(payload.get("model_filament_volume_cm3", 0) or 0), 3),
+            "support_filament_volume_cm3": round(float(payload.get("support_filament_volume_cm3", 0) or 0), 3),
+            "model_filament_weight_g": round(float(payload.get("model_filament_weight_g", 0) or 0), 3),
+            "support_filament_weight_g": round(float(payload.get("support_filament_weight_g", 0) or 0), 3),
+            "model_material_cost_eur": round(float(payload.get("model_material_cost_eur", 0) or 0), 2),
+            "support_material_cost_eur": round(float(payload.get("support_material_cost_eur", 0) or 0), 2),
+
             "applied_slicer_settings": payload.get("applied_slicer_settings", {}),
             "tools": payload.get("tools", []),
         }
