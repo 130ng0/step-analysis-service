@@ -1,0 +1,632 @@
+# 3D Model Analysis Service
+
+## Overview
+
+The 3D Model Analysis Service accepts uploaded STEP or STL files, converts them when necessary, slices them using an Orca worker, calculates material and machine costs, generates a preview image, and exposes the result through an asynchronous job API.
+
+The service is designed for integration with Odoo and similar systems that need reliable, sequential processing of potentially expensive slicing jobs.
+
+---
+
+## Core Capabilities
+
+* Upload STEP and STL files
+* Automatic STEP to STL conversion
+* Sequential job queue processing
+* Orca slicer integration through a dedicated worker
+* Preview image generation from STL
+* Material, support, and machine cost calculation
+* Polling-based job API for asynchronous integrations
+* Cleanup after result consumption
+
+---
+
+## Production Architecture
+
+### Components
+
+#### 1. Public API Service
+
+This FastAPI application:
+
+* accepts incoming jobs
+* stores job payloads and uploaded files
+* exposes status and result endpoints
+* starts the internal job worker loop on startup
+
+#### 2. Internal Job Worker
+
+A background worker loop:
+
+* pulls the next queued job
+* converts STEP to STL if needed
+* renders a preview image
+* calls the Orca worker for slicing
+* stores the final result or error state
+
+#### 3. Orca Worker
+
+A dedicated slicing service that:
+
+* receives STL files and slicing parameters
+* resolves machine, process, and filament profiles
+* slices with OrcaSlicer
+* parses G-code for time, material usage, and cost details
+
+#### 4. Job Store
+
+SQLite-backed job persistence for:
+
+* queued jobs
+* running jobs
+* completed jobs
+* failed jobs
+* cleanup after consumption
+
+---
+
+## High-Level Request Flow
+
+1. Client uploads STEP or STL file to `POST /analyze-model/jobs`
+2. Service stores file and metadata, returns a `job_id`
+3. Background worker claims the next queued job
+4. STEP files are converted to STL
+5. Preview image is rendered from STL
+6. STL is sent to Orca worker for slicing
+7. Result is stored under the job
+8. Client polls `GET /analyze-model/jobs/{job_id}`
+9. Once complete, client retrieves the result
+10. Client calls `DELETE /analyze-model/jobs/{job_id}` to clean up
+
+---
+
+## API Endpoints
+
+## Health Check
+
+```http
+GET /health
+```
+
+### Example Response
+
+```json
+{
+  "status": "ok",
+  "orca_worker": "ok"
+}
+```
+
+---
+
+## Create Analysis Job
+
+```http
+POST /analyze-model/jobs
+```
+
+### Content Type
+
+`multipart/form-data`
+
+### Form Fields
+
+#### File
+
+* `file`: STEP or STL file
+
+#### Material Mapping
+
+* `material_profile`
+* `support_material_type`
+* `material_display_name`
+* `support_material_display_name`
+
+#### Slicer Settings
+
+* `infill_percent`
+* `perimeter_count`
+* `top_layers`
+* `bottom_layers`
+
+#### Pricing Data
+
+* `machine_hour_rate_eur`
+* `margin_factor`
+* `material_density_g_cm3`
+* `material_price_eur_per_kg`
+* `support_density_g_cm3`
+* `support_price_eur_per_kg`
+
+### Example Response
+
+```json
+{
+  "success": true,
+  "job_id": "4c4378fd-bcb7-4c0b-a8d7-7cc4d7caa4fb",
+  "status": "queued"
+}
+```
+
+---
+
+## Get Job Status
+
+```http
+GET /analyze-model/jobs/{job_id}
+```
+
+### Queued Response
+
+```json
+{
+  "success": true,
+  "job_id": "4c4378fd-bcb7-4c0b-a8d7-7cc4d7caa4fb",
+  "status": "queued",
+  "queue_position": 2
+}
+```
+
+### Processing Response
+
+```json
+{
+  "success": true,
+  "job_id": "4c4378fd-bcb7-4c0b-a8d7-7cc4d7caa4fb",
+  "status": "processing"
+}
+```
+
+### Done Response
+
+```json
+{
+  "success": true,
+  "job_id": "4c4378fd-bcb7-4c0b-a8d7-7cc4d7caa4fb",
+  "status": "done",
+  "result": {
+    "success": true,
+    "filename": "part.step",
+    "method": "slice",
+    "material_profile": "abs",
+    "support_material_type": "breakaway",
+    "unit": "mm",
+    "machine_hour_rate_eur": 8.0,
+    "margin_factor": 1.0,
+    "print_time_minutes": 54,
+    "print_time_hours": 0.9,
+    "filament_length_mm_total": 7348.29,
+    "filament_volume_cm3_total": 17.67,
+    "filament_weight_g_total": 18.377,
+    "material_cost_eur_total": 0.51,
+    "machine_cost_eur": 7.2,
+    "subtotal_cost_eur": 7.71,
+    "total_price_eur": 7.71,
+    "preview_png_base64": "..."
+  }
+}
+```
+
+### Error Response
+
+```json
+{
+  "success": false,
+  "job_id": "4c4378fd-bcb7-4c0b-a8d7-7cc4d7caa4fb",
+  "status": "error",
+  "error": "SLICE_FAILED",
+  "details": "Orca worker failed: ..."
+}
+```
+
+---
+
+## Delete Job
+
+```http
+DELETE /analyze-model/jobs/{job_id}
+```
+
+### Example Response
+
+```json
+{
+  "success": true,
+  "job_id": "4c4378fd-bcb7-4c0b-a8d7-7cc4d7caa4fb",
+  "deleted": true
+}
+```
+
+This endpoint should be called after the client has persisted the result.
+
+---
+
+## Request and Result Semantics
+
+### Material Pricing Source of Truth
+
+The service expects pricing and density values from Odoo or another upstream system.
+
+This means:
+
+* slicing profiles are used for slicing behavior
+* pricing and density are controlled externally
+* the service does not need to be the master source for material economics
+
+### Support Material Modes
+
+Supported support material types:
+
+* `none`
+* `breakaway`
+* `hips`
+* `soluble`
+
+Typical meaning:
+
+* `none`: no support pricing
+* `breakaway`: same pricing and density as part material unless overridden
+* `hips`: support-specific pricing and density
+* `soluble`: support-specific pricing and density
+
+---
+
+## Preview Rendering
+
+Preview images are generated after STL conversion and before slicing result assembly.
+
+### Output Field
+
+```json
+"preview_png_base64": "..."
+```
+
+### Notes
+
+* preview is a static PNG
+* preview is rendered from STL, not STEP directly
+* preview rendering failure should not block slicing results
+
+---
+
+## Directory Layout
+
+Recommended service structure:
+
+```text
+app/
+  main.py
+  config.py
+  schemas.py
+  security.py
+  job_store.py
+  worker_loop.py
+  services/
+    slice_input_converter.py
+    model_analysis.py
+    orca_client.py
+```
+
+Runtime file storage example:
+
+```text
+/tmp/step-analysis-jobs/
+  jobs.db
+  files/
+    <job_id>/
+      input.bin
+      input_name.txt
+      result.json
+```
+
+---
+
+## Environment Variables
+
+### API Service
+
+```env
+ORCA_WORKER_URL=http://orca-worker:8090
+ORCA_WORKER_TIMEOUT=1800
+JOB_DB_PATH=/tmp/step-analysis-jobs/jobs.db
+JOB_FILES_DIR=/tmp/step-analysis-jobs/files
+```
+
+### Orca Worker
+
+Set these according to your worker implementation:
+
+```env
+KEEP_TMP=false
+```
+
+---
+
+## Installation
+
+## Python Version
+
+Recommended:
+
+* Python 3.11 or 3.12
+
+## Install Dependencies
+
+```bash
+pip install -r requirements.txt
+```
+
+## Start API Service
+
+```bash
+uvicorn app.main:app --host 0.0.0.0 --port 5050
+```
+
+---
+
+## Recommended `requirements.txt`
+
+```txt
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+python-multipart==0.0.22
+requests==2.32.5
+cadquery==2.4.0
+trimesh==4.4.9
+numpy==1.26.4
+matplotlib==3.9.0
+pydantic~=2.12.5
+```
+
+If you encounter compatibility issues between CadQuery and Matplotlib in your container, pin Matplotlib more conservatively.
+
+---
+
+## Docker Notes
+
+### System Dependencies
+
+For preview rendering and CAD stack support, containers often need additional OS packages.
+
+Typical requirements:
+
+```dockerfile
+RUN apt-get update && apt-get install -y \
+    libgl1 \
+    libglib2.0-0 \
+    && rm -rf /var/lib/apt/lists/*
+```
+
+### Example API Dockerfile
+
+```dockerfile
+FROM python:3.12-slim
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y \
+    libgl1 \
+    libglib2.0-0 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY app ./app
+
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "5050"]
+```
+
+---
+
+## Example Docker Compose
+
+```yaml
+version: "3.9"
+
+services:
+  step-analysis-service:
+    build: .
+    ports:
+      - "5050:5050"
+    environment:
+      ORCA_WORKER_URL: http://orca-worker:8090
+      ORCA_WORKER_TIMEOUT: 1800
+      JOB_DB_PATH: /tmp/step-analysis-jobs/jobs.db
+      JOB_FILES_DIR: /tmp/step-analysis-jobs/files
+    depends_on:
+      - orca-worker
+
+  orca-worker:
+    image: your-orca-worker-image
+    ports:
+      - "8090:8090"
+    environment:
+      KEEP_TMP: "false"
+```
+
+---
+
+## Deployment Guidance
+
+## Single Instance Requirement
+
+The current SQLite-based queue is intended for a single API instance.
+
+Do not horizontally scale the API service without replacing the job store and queue coordination mechanism.
+
+### Good for
+
+* VPS deployment
+* single Docker host
+* small internal production setup
+
+### Not yet ideal for
+
+* multiple replicas
+* Kubernetes horizontal scaling
+* distributed workers without shared coordination
+
+## If scaling later
+
+Move to one of:
+
+* Postgres-backed job coordination
+* Redis-backed queue
+* dedicated task framework such as Celery or RQ
+
+---
+
+## Reliability Notes
+
+### Why the worker loop uses background execution
+
+The job worker must not block FastAPI request handling. Long-running conversion, rendering, and slicing tasks should run outside the main event loop.
+
+### Cleanup Strategy
+
+Recommended cleanup policy:
+
+* client deletes job after persisting the result
+* service deletes uploaded files and stored result
+* optional TTL cleanup for abandoned jobs
+
+### Suggested TTL
+
+* delete unconsumed done/error jobs after 24 hours
+
+---
+
+## Odoo Integration
+
+## Recommended Odoo Flow
+
+1. User uploads file in Odoo
+2. Odoo calls `POST /analyze-model/jobs`
+3. Odoo stores `service_job_id`
+4. User or cron polls `GET /analyze-model/jobs/{job_id}`
+5. When `done`, Odoo stores:
+
+   * print time
+   * filament usage
+   * cost data
+   * preview image
+6. Odoo calls `DELETE /analyze-model/jobs/{job_id}`
+7. Odoo clears remote job reference
+
+## Odoo Fields Typically Stored
+
+* `service_job_id`
+* `service_job_status`
+* `service_job_queue_position`
+* `service_job_last_poll`
+* `preview_image`
+* pricing result fields
+* tool breakdown JSON
+
+---
+
+## Example cURL Requests
+
+## Create Job
+
+```bash
+curl -X POST \
+  'http://localhost:5050/analyze-model/jobs' \
+  -H 'accept: application/json' \
+  -H 'x-api-key: YOUR_API_KEY' \
+  -H 'Content-Type: multipart/form-data' \
+  -F 'material_profile=abs' \
+  -F 'support_material_type=breakaway' \
+  -F 'infill_percent=20' \
+  -F 'perimeter_count=5' \
+  -F 'top_layers=5' \
+  -F 'bottom_layers=5' \
+  -F 'machine_hour_rate_eur=8' \
+  -F 'margin_factor=1' \
+  -F 'material_density_g_cm3=1.04' \
+  -F 'material_price_eur_per_kg=28' \
+  -F 'support_density_g_cm3=1.04' \
+  -F 'support_price_eur_per_kg=28' \
+  -F 'material_display_name=ABS Pro' \
+  -F 'support_material_display_name=Breakaway' \
+  -F 'file=@part.step'
+```
+
+## Poll Job
+
+```bash
+curl -X GET \
+  'http://localhost:5050/analyze-model/jobs/JOB_ID' \
+  -H 'accept: application/json' \
+  -H 'x-api-key: YOUR_API_KEY'
+```
+
+## Delete Job
+
+```bash
+curl -X DELETE \
+  'http://localhost:5050/analyze-model/jobs/JOB_ID' \
+  -H 'accept: application/json' \
+  -H 'x-api-key: YOUR_API_KEY'
+```
+
+---
+
+## Error Handling
+
+Common error codes:
+
+* `UNSUPPORTED_FILE_FORMAT`
+* `FILE_TOO_LARGE`
+* `SLICE_INPUT_CONVERSION_FAILED`
+* `SLICE_FAILED`
+* `ORCA_WORKER_UNREACHABLE`
+* `JOB_NOT_FOUND`
+* `INTERNAL_SERVER_ERROR`
+
+Recommended client behavior:
+
+* show user-friendly message for validation errors
+* retry polling for `queued` and `processing`
+* stop polling on `done` or `error`
+* persist `result` immediately before deleting the job
+
+---
+
+## Security
+
+* protect endpoints with API key validation
+* avoid exposing raw internal file paths
+* delete processed files after consumption
+* consider upload size limits and rate limiting in production
+
+---
+
+## Observability
+
+Recommended production additions:
+
+* structured JSON logging
+* request IDs in logs
+* job lifecycle logs
+* metrics for queue length and processing times
+* alerting for repeated slice failures
+
+---
+
+## Future Improvements
+
+* automatic stale job cleanup
+* retry policy for transient Orca worker failures
+* Postgres-backed queue state
+* WebSocket or server-sent events for live status updates
+* multiple worker priorities
+* preview rendering enhancements
+* job cancellation support
+
+---
+
+## License / Ownership
+
+Internal project for Nevo3D GmbH.
