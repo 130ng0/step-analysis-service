@@ -21,10 +21,12 @@ from app.job_store import (
     create_job,
     delete_job,
     get_job,
+    get_job_dir,
     get_queue_position,
     init_db,
     mark_consumed,
 )
+
 from app.worker_loop import worker_loop
 
 logging.basicConfig(level=logging.INFO)
@@ -194,18 +196,38 @@ def get_analysis_job(job_id: str):
     status = job["status"]
 
     if status == "queued":
+        job_dir = get_job_dir(job_id)
+        preview_png_base64 = None
+        preview_path = job_dir / "preview_base64.txt"
+        if preview_path.exists():
+            preview_png_base64 = preview_path.read_text(encoding="utf-8")
+
         return {
             "success": True,
             "job_id": job_id,
             "status": "queued",
+            "phase": job.get("phase") or "queued",
+            "progress_percent": job.get("progress_percent") or 0,
+            "eta_seconds": job.get("eta_seconds"),
             "queue_position": get_queue_position(job_id),
+            "preview_png_base64": preview_png_base64,
         }
 
     if status == "processing":
+        job_dir = get_job_dir(job_id)
+        preview_png_base64 = None
+        preview_path = job_dir / "preview_base64.txt"
+        if preview_path.exists():
+            preview_png_base64 = preview_path.read_text(encoding="utf-8")
+
         return {
             "success": True,
             "job_id": job_id,
             "status": "processing",
+            "phase": job.get("phase") or "processing",
+            "progress_percent": job.get("progress_percent") or 0,
+            "eta_seconds": job.get("eta_seconds"),
+            "preview_png_base64": preview_png_base64,
         }
 
     if status == "done":

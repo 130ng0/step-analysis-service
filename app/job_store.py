@@ -39,10 +39,27 @@ def init_db() -> None:
                     result_json TEXT,
                     error_code TEXT,
                     error_details TEXT,
-                    consumed_at TEXT
+                    consumed_at TEXT,
+                    phase TEXT,
+                    progress_percent INTEGER,
+                    eta_seconds INTEGER
                 )
                 """
             )
+
+            existing_cols = {
+                row[1]
+                for row in conn.execute("PRAGMA table_info(jobs)").fetchall()
+            }
+
+            for col_name, col_type in [
+                ("phase", "TEXT"),
+                ("progress_percent", "INTEGER"),
+                ("eta_seconds", "INTEGER"),
+            ]:
+                if col_name not in existing_cols:
+                    conn.execute(f"ALTER TABLE jobs ADD COLUMN {col_name} {col_type}")
+
             conn.commit()
         finally:
             conn.close()
@@ -73,8 +90,8 @@ def create_job(filename: str, request_payload: dict[str, Any], file_bytes: bytes
             conn.execute(
                 """
                 INSERT INTO jobs (
-                    job_id, status, created_at, filename, request_json
-                ) VALUES (?, ?, ?, ?, ?)
+                    job_id, status, created_at, filename, request_json, phase, progress_percent, eta_seconds
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     job_id,
@@ -82,6 +99,9 @@ def create_job(filename: str, request_payload: dict[str, Any], file_bytes: bytes
                     created_at,
                     filename,
                     json.dumps(request_payload, ensure_ascii=False),
+                    "queued",
+                    0,
+                    None,
                 ),
             )
             conn.commit()
@@ -133,10 +153,10 @@ def claim_next_job() -> dict[str, Any] | None:
             conn.execute(
                 """
                 UPDATE jobs
-                SET status = ?, started_at = ?
+                SET status = ?, started_at = ?, phase = ?, progress_percent = ?, eta_seconds = ?
                 WHERE job_id = ? AND status = 'queued'
                 """,
-                ("processing", utc_now_iso(), job_id),
+                ("processing", utc_now_iso(), "queued", 1, None, job_id),
             )
             conn.commit()
 
@@ -162,10 +182,11 @@ def mark_done(job_id: str, result_payload: dict[str, Any]) -> None:
             conn.execute(
                 """
                 UPDATE jobs
-                SET status = ?, finished_at = ?, result_json = ?, error_code = NULL, error_details = NULL
+                SET status = ?, finished_at = ?, result_json = ?, error_code = NULL, error_details = NULL,
+                    phase = ?, progress_percent = ?, eta_seconds = ?
                 WHERE job_id = ?
                 """,
-                ("done", utc_now_iso(), json.dumps(result_payload, ensure_ascii=False), job_id),
+                ("done", utc_now_iso(), json.dumps(result_payload, ensure_ascii=False), "done", 100, 0, job_id),
             )
             conn.commit()
         finally:
@@ -179,10 +200,11 @@ def mark_error(job_id: str, error_code: str, details: str) -> None:
             conn.execute(
                 """
                 UPDATE jobs
-                SET status = ?, finished_at = ?, error_code = ?, error_details = ?
+                SET status = ?, finished_at = ?, error_code = ?, error_details = ?,
+                    phase = ?, eta_seconds = ?
                 WHERE job_id = ?
                 """,
-                ("error", utc_now_iso(), error_code, details, job_id),
+                ("error", utc_now_iso(), error_code, details, "error", 0, job_id),
             )
             conn.commit()
         finally:
@@ -266,3 +288,49 @@ def get_queue_position(job_id: str) -> int | None:
 
 def get_job_dir(job_id: str) -> Path:
     return JOB_FILES_DIR / job_id
+
+
+def update_job_progress(
+    job_id: str,
+    *,
+    phase: str | None = None,
+    progress_percent: int | None = None,
+    eta_seconds: int | None = None,
+) -> None:
+    fields = []
+    values = []
+
+    if phase is not None:
+        fields.append("phase = ?")
+        values.append(phase)
+
+    if progress_percent is not None:
+        fields.append("progress_percent = ?")
+        values.append(int(progress_percent))
+
+    if eta_seconds is not None:
+        fields.append("eta_seconds = ?")
+        values.append(int(eta_seconds))
+    elif eta_seconds is None and phase is not None:
+        fields.append("eta_seconds = ?")
+        values.append(None)
+
+    if not fields:
+        return
+
+    values.append(job_id)
+
+    with _db_lock:
+        conn = _connect()
+        try:
+            conn.execute(
+                f"""
+                UPDATE jobs
+                SET {", ".join(fields)}
+                WHERE job_id = ?
+                """,
+                tuple(values),
+            )
+            conn.commit()
+        finally:
+            conn.close()

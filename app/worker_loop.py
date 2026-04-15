@@ -2,11 +2,20 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
+import time
 
 from app.job_store import claim_next_job, get_job_dir, mark_done, mark_error
 from app.services.model_analysis import render_preview_from_converted_stl_bytes
 from app.services.orca_client import OrcaClientError, slice_with_worker
 from app.services.slice_input_converter import SliceInputConversionError, convert_upload_to_stl_bytes
+from app.job_store import (
+    claim_next_job,
+    get_job_dir,
+    mark_done,
+    mark_error,
+    update_job_progress,
+)
 
 
 def process_job_sync(job: dict) -> None:
@@ -17,16 +26,36 @@ def process_job_sync(job: dict) -> None:
     job_dir = get_job_dir(job_id)
     input_path = job_dir / "input.bin"
 
+    started_ts = time.time()
+
     try:
+        update_job_progress(job_id, phase="converting", progress_percent=5, eta_seconds=90)
+
         file_bytes = input_path.read_bytes()
 
         stl_bytes, stl_filename = convert_upload_to_stl_bytes(file_bytes, filename)
+
+        update_job_progress(job_id, phase="rendering_preview", progress_percent=20, eta_seconds=70)
+
         preview_png_base64 = render_preview_from_converted_stl_bytes(stl_bytes)
+        if preview_png_base64:
+            (job_dir / "preview_base64.txt").write_text(preview_png_base64, encoding="utf-8")
+
+        update_job_progress(job_id, phase="slicing", progress_percent=35, eta_seconds=60)
 
         worker_payload = slice_with_worker(
             stl_bytes=stl_bytes,
             stl_filename=stl_filename,
             payload=request_payload,
+        )
+
+        elapsed = max(1, int(time.time() - started_ts))
+        remaining_guess = max(0, 5 - min(5, elapsed // 10))
+        update_job_progress(
+            job_id,
+            phase="finalizing",
+            progress_percent=90,
+            eta_seconds=remaining_guess,
         )
 
         print_time_hours = float(worker_payload.get("print_time_hours") or 0.0)
