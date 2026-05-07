@@ -12,7 +12,7 @@ import trimesh
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 
 from app.config import ALLOWED_EXTENSIONS
-
+from PIL import Image, ImageChops
 
 class ModelAnalysisError(Exception):
     pass
@@ -52,6 +52,40 @@ def _load_stl_mesh(path: str) -> trimesh.Trimesh:
         raise ModelAnalysisError("Imported STL is not a valid mesh")
 
     return mesh
+
+
+def _crop_png_whitespace(png_bytes: bytes, padding: int = 20) -> bytes:
+    """
+    Entfernt weiße/fast weiße Ränder aus einem PNG und fügt etwas Padding hinzu.
+    """
+    try:
+        image = Image.open(io.BytesIO(png_bytes)).convert("RGB")
+
+        bg = Image.new("RGB", image.size, image.getpixel((0, 0)))
+        diff = ImageChops.difference(image, bg)
+
+        # etwas verstärken, damit sehr helle Unterschiede erkannt werden
+        diff = ImageChops.add(diff, diff, 2.0, -10)
+
+        bbox = diff.getbbox()
+        if not bbox:
+            return png_bytes
+
+        left, upper, right, lower = bbox
+
+        left = max(left - padding, 0)
+        upper = max(upper - padding, 0)
+        right = min(right + padding, image.width)
+        lower = min(lower + padding, image.height)
+
+        cropped = image.crop((left, upper, right, lower))
+
+        out = io.BytesIO()
+        cropped.save(out, format="PNG", optimize=True)
+        return out.getvalue()
+
+    except Exception:
+        return png_bytes
 
 
 def render_stl_preview_png_base64(stl_bytes: bytes) -> str | None:
@@ -116,10 +150,13 @@ def render_stl_preview_png_base64(stl_bytes: bytes) -> str | None:
             buf,
             format="png",
             bbox_inches="tight",
-            pad_inches=0.02,
+            pad_inches=0.0,
             transparent=False,
         )
-        return base64.b64encode(buf.getvalue()).decode("ascii")
+
+        png_bytes = _crop_png_whitespace(buf.getvalue(), padding=18)
+
+        return base64.b64encode(png_bytes).decode("ascii")
 
     except Exception:
         return None
