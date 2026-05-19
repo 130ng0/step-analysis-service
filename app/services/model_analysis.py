@@ -4,6 +4,8 @@ import base64
 import io
 import os
 import tempfile
+import math
+import numpy as np
 
 import matplotlib
 matplotlib.use("Agg")
@@ -13,6 +15,7 @@ from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 
 from app.config import ALLOWED_EXTENSIONS
 from PIL import Image, ImageChops
+from mpl_toolkits.mplot3d.art3d import Line3DCollection
 
 class ModelAnalysisError(Exception):
     pass
@@ -88,6 +91,45 @@ def _crop_png_whitespace(png_bytes: bytes, padding: int = 20) -> bytes:
         return png_bytes
 
 
+def _extract_feature_edges(mesh: trimesh.Trimesh, angle_threshold_deg: float = 35.0):
+    """
+    Liefert nur sichtbare/markante Kanten:
+    - Boundary-Kanten
+    - Kanten zwischen Flächen mit größerem Winkel
+    Kein vollständiges STL-Dreiecksnetz.
+    """
+    edges = []
+
+    try:
+        face_adjacency = mesh.face_adjacency
+        face_adjacency_edges = mesh.face_adjacency_edges
+        face_normals = mesh.face_normals
+
+        threshold = math.cos(math.radians(angle_threshold_deg))
+
+        for edge, faces in zip(face_adjacency_edges, face_adjacency):
+            n1 = face_normals[faces[0]]
+            n2 = face_normals[faces[1]]
+            dot = float(np.dot(n1, n2))
+
+            if dot < threshold:
+                p1 = mesh.vertices[edge[0]]
+                p2 = mesh.vertices[edge[1]]
+                edges.append([p1, p2])
+
+        # Boundary edges ergänzen
+        if hasattr(mesh, "edges_boundary"):
+            for edge in mesh.edges_boundary:
+                p1 = mesh.vertices[edge[0]]
+                p2 = mesh.vertices[edge[1]]
+                edges.append([p1, p2])
+
+    except Exception:
+        return []
+
+    return edges
+
+
 def render_stl_preview_png_base64(stl_bytes: bytes) -> str | None:
     """
     Rendert ein einfaches PNG-Preview aus STL-Bytes.
@@ -127,6 +169,16 @@ def render_stl_preview_png_base64(stl_bytes: bytes) -> str | None:
         poly.set_edgecolor("none")
         poly.set_facecolor((0.70, 0.70, 0.78, 1.0))
         ax.add_collection3d(poly)
+
+        feature_edges = _extract_feature_edges(mesh, angle_threshold_deg=35.0)
+
+        if feature_edges:
+            edge_collection = Line3DCollection(
+                feature_edges,
+                linewidths=0.8,
+                colors=(0.18, 0.18, 0.22, 0.55),
+            )
+            ax.add_collection3d(edge_collection)
 
         bounds = mesh.bounds
         mins = bounds[0]
