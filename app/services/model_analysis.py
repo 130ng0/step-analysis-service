@@ -121,10 +121,10 @@ def render_stl_preview_png_base64(stl_bytes: bytes) -> str | None:
 
         poly = Poly3DCollection(
             triangles,
-            linewidths=0.05,
+            linewidths=0.0,
             alpha=1.0,
         )
-        poly.set_edgecolor((0.2, 0.2, 0.2, 0.15))
+        poly.set_edgecolor("none")
         poly.set_facecolor((0.70, 0.70, 0.78, 1.0))
         ax.add_collection3d(poly)
 

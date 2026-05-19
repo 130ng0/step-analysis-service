@@ -457,3 +457,88 @@ async def analyze_model(
                 "filename": filename,
             },
         )
+
+
+@app.post(
+    "/render-preview",
+    response_model=None,
+    responses={400: {"model": ErrorResponse}, 401: {"model": ErrorResponse}, 500: {"model": ErrorResponse}},
+    dependencies=[Depends(verify_api_key)],
+)
+async def render_preview(
+    file: UploadFile = File(...),
+):
+    filename = file.filename or "model.step"
+
+    if not filename.lower().endswith(ALLOWED_EXTENSIONS):
+        return JSONResponse(
+            status_code=400,
+            content={
+                "success": False,
+                "error": "UNSUPPORTED_FILE_FORMAT",
+                "details": f"Only {', '.join(ALLOWED_EXTENSIONS)} files are supported",
+                "filename": filename,
+            },
+        )
+
+    file_bytes = await file.read()
+
+    if not file_bytes:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty")
+
+    if len(file_bytes) > MAX_FILE_SIZE_BYTES:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "success": False,
+                "error": "FILE_TOO_LARGE",
+                "details": f"Maximum allowed size is {MAX_FILE_SIZE_BYTES // (1024 * 1024)} MB",
+                "filename": filename,
+            },
+        )
+
+    try:
+        stl_bytes, stl_filename = convert_upload_to_stl_bytes(file_bytes, filename)
+        preview_png_base64 = render_preview_from_converted_stl_bytes(stl_bytes)
+
+        if not preview_png_base64:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "success": False,
+                    "error": "PREVIEW_RENDER_FAILED",
+                    "details": "Preview image could not be rendered.",
+                    "filename": filename,
+                },
+            )
+
+        return {
+            "success": True,
+            "filename": filename,
+            "rendered_filename": "preview.png",
+            "source_stl_filename": stl_filename,
+            "mime_type": "image/png",
+            "preview_png_base64": preview_png_base64,
+        }
+
+    except SliceInputConversionError as exc:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "success": False,
+                "error": "SLICE_INPUT_CONVERSION_FAILED",
+                "details": str(exc),
+                "filename": filename,
+            },
+        )
+    except Exception as exc:
+        logger.exception("preview_render_unexpected_error filename=%s", filename)
+        return JSONResponse(
+            status_code=500,
+            content={
+                "success": False,
+                "error": "INTERNAL_SERVER_ERROR",
+                "details": str(exc),
+                "filename": filename,
+            },
+        )
