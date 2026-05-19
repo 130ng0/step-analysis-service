@@ -91,35 +91,38 @@ def _crop_png_whitespace(png_bytes: bytes, padding: int = 20) -> bytes:
         return png_bytes
 
 
+def _view_direction(elev_deg: float = 22.0, azim_deg: float = -55.0):
+    elev = math.radians(elev_deg)
+    azim = math.radians(azim_deg)
+
+    return np.array([
+        math.cos(elev) * math.cos(azim),
+        math.cos(elev) * math.sin(azim),
+        math.sin(elev),
+    ])
+
+
 def _extract_feature_edges(mesh: trimesh.Trimesh, angle_threshold_deg: float = 35.0):
-    """
-    Liefert nur sichtbare/markante Kanten:
-    - Boundary-Kanten
-    - Kanten zwischen Flächen mit größerem Winkel
-    Kein vollständiges STL-Dreiecksnetz.
-    """
     edges = []
 
     try:
-        face_adjacency = mesh.face_adjacency
-        face_adjacency_edges = mesh.face_adjacency_edges
+        view_dir = _view_direction()
         face_normals = mesh.face_normals
-
         threshold = math.cos(math.radians(angle_threshold_deg))
 
-        for edge, faces in zip(face_adjacency_edges, face_adjacency):
+        for edge, faces in zip(mesh.face_adjacency_edges, mesh.face_adjacency):
             n1 = face_normals[faces[0]]
             n2 = face_normals[faces[1]]
+
+            # nur Kanten zeichnen, wenn mindestens eine angrenzende Fläche zur Kamera zeigt
+            visible = (np.dot(n1, view_dir) > -0.15) or (np.dot(n2, view_dir) > -0.15)
+            if not visible:
+                continue
+
             dot = float(np.dot(n1, n2))
 
+            # nur harte/markante Kanten, kein STL-Dreiecksnetz
             if dot < threshold:
-                p1 = mesh.vertices[edge[0]]
-                p2 = mesh.vertices[edge[1]]
-                edges.append([p1, p2])
-
-        # Boundary edges ergänzen
-        if hasattr(mesh, "edges_boundary"):
-            for edge in mesh.edges_boundary:
                 p1 = mesh.vertices[edge[0]]
                 p2 = mesh.vertices[edge[1]]
                 edges.append([p1, p2])
@@ -160,6 +163,9 @@ def render_stl_preview_png_base64(stl_bytes: bytes) -> str | None:
 
         fig = plt.figure(figsize=(5, 5), dpi=160)
         ax = fig.add_subplot(111, projection="3d")
+
+        fig.patch.set_facecolor("white")
+        ax.set_facecolor("white")
 
         poly = Poly3DCollection(
             triangles,
@@ -210,6 +216,7 @@ def render_stl_preview_png_base64(stl_bytes: bytes) -> str | None:
             bbox_inches="tight",
             pad_inches=0.0,
             transparent=False,
+            facecolor="white",
         )
 
         png_bytes = _crop_png_whitespace(buf.getvalue(), padding=18)
