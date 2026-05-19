@@ -163,20 +163,26 @@ def render_stl_preview_png_base64(stl_bytes: bytes) -> str | None:
 
         poly = Poly3DCollection(
             triangles,
-            linewidths=0.0,
-            alpha=1.0,
+            linewidths=0,
+            edgecolors="none",
         )
-        poly.set_edgecolor("none")
-        poly.set_facecolor((0.70, 0.70, 0.78, 1.0))
+
+        # komplett deckende Oberfläche
+        poly.set_facecolor((0.72, 0.72, 0.78, 1.0))
+        poly.set_alpha(1.0)
+
         ax.add_collection3d(poly)
 
-        feature_edges = _extract_feature_edges(mesh, angle_threshold_deg=35.0)
+        feature_edges = _extract_feature_edges(
+            mesh,
+            angle_threshold_deg=35.0,
+        )
 
         if feature_edges:
             edge_collection = Line3DCollection(
                 feature_edges,
-                linewidths=0.8,
-                colors=(0.18, 0.18, 0.22, 0.55),
+                colors=[(0.15, 0.15, 0.18, 0.85)],
+                linewidths=0.9,
             )
             ax.add_collection3d(edge_collection)
 
