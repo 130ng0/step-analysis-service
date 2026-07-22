@@ -150,7 +150,7 @@ def claim_next_job() -> dict[str, Any] | None:
                 return None
 
             job_id = row["job_id"]
-            conn.execute(
+            cursor = conn.execute(
                 """
                 UPDATE jobs
                 SET status = ?, started_at = ?, phase = ?, progress_percent = ?, eta_seconds = ?
@@ -159,6 +159,9 @@ def claim_next_job() -> dict[str, Any] | None:
                 ("processing", utc_now_iso(), "queued", 1, None, job_id),
             )
             conn.commit()
+
+            if cursor.rowcount != 1:
+                return None
 
             updated = conn.execute(
                 "SELECT * FROM jobs WHERE job_id = ?",

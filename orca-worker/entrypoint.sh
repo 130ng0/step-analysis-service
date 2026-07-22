@@ -21,4 +21,6 @@ echo "[orca-worker] stl files in /workspace/stl-test:"
 find /workspace/stl-test -maxdepth 2 -type f | sort || true
 
 
-exec uvicorn api:app --host 0.0.0.0 --port 8090
+ORCA_WORKER_COUNT="${ORCA_WORKER_COUNT:-2}"
+echo "[orca-worker] uvicorn workers: ${ORCA_WORKER_COUNT}"
+exec uvicorn api:app --host 0.0.0.0 --port 8090 --workers "${ORCA_WORKER_COUNT}"

@@ -4,7 +4,7 @@
 
 The 3D Model Analysis Service accepts uploaded STEP or STL files, converts them when necessary, slices them using an Orca worker, calculates material and machine costs, generates a preview image, and exposes the result through an asynchronous job API.
 
-The service is designed for integration with Odoo and similar systems that need reliable, sequential processing of potentially expensive slicing jobs.
+The service is designed for integration with Odoo and similar systems that need reliable, parallel processing of potentially expensive slicing jobs.
 
 ---
 
@@ -12,7 +12,7 @@ The service is designed for integration with Odoo and similar systems that need 
 
 * Upload STEP and STL files
 * Automatic STEP to STL conversion
-* Sequential job queue processing
+* Parallel job queue processing with configurable worker counts
 * Orca slicer integration through a dedicated worker
 * Preview image generation from STL
 * Material, support, and machine cost calculation
@@ -32,13 +32,13 @@ This FastAPI application:
 * accepts incoming jobs
 * stores job payloads and uploaded files
 * exposes status and result endpoints
-* starts the internal job worker loop on startup
+* starts the configured number of internal job worker loops on startup
 
 #### 2. Internal Job Worker
 
 A background worker loop:
 
-* pulls the next queued job
+* atomically claims the next queued job
 * converts STEP to STL if needed
 * renders a preview image
 * calls the Orca worker for slicing
@@ -630,3 +630,17 @@ Recommended production additions:
 ## License / Ownership
 
 Internal project for Nevo3D GmbH.
+
+
+## Configurable parallel workers
+
+Set the worker counts in the `.env` file used by Docker Compose:
+
+```env
+ANALYSIS_WORKER_COUNT=4
+ORCA_WORKER_COUNT=4
+```
+
+`ANALYSIS_WORKER_COUNT` controls how many queued analysis jobs the public service processes concurrently.
+`ORCA_WORKER_COUNT` controls how many Orca slicing requests the Orca container can execute concurrently.
+For balanced processing, use the same value for both. Increase the values only when enough CPU and memory are available.
