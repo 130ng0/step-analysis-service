@@ -15,7 +15,7 @@ from fastapi.responses import JSONResponse
 from profile_loader import ProfileLoaderError, select_profile_set
 from resolve_profiles import ResolveProfilesError, resolve_profile_set
 
-app = FastAPI(title="Orca Worker API", version="2.3.0")
+app = FastAPI(title="Orca Worker API", version="2.4.0")
 
 KEEP_TMP = os.getenv("KEEP_TMP", "false").lower() == "true"
 ORCA_PATH = "/opt/orca/squashfs-root/AppRun"
@@ -63,28 +63,59 @@ async def slice_model(
             tmp.write(file_bytes)
             tmp_input = tmp.name
 
-        result = run_orca_with_profiles(
-            stl_path=tmp_input,
-            material_profile=material_profile,
-            support_material_type=support_material_type,
-            infill_percent=infill_percent,
-            perimeter_count=perimeter_count,
-            top_layers=top_layers,
-            bottom_layers=bottom_layers,
-            material_density_g_cm3=material_density_g_cm3,
-            material_price_eur_per_kg=material_price_eur_per_kg,
-            support_density_g_cm3=support_density_g_cm3,
-            support_price_eur_per_kg=support_price_eur_per_kg,
-            material_display_name=material_display_name,
-            support_material_display_name=support_material_display_name,
-        )
+        requested_support_material_type = support_material_type
+        effective_support_material_type = support_material_type
+        support_fallback_applied = False
+        initial_slice_error = None
+
+        try:
+            result = run_orca_with_profiles(
+                stl_path=tmp_input,
+                material_profile=material_profile,
+                support_material_type=support_material_type,
+                infill_percent=infill_percent,
+                perimeter_count=perimeter_count,
+                top_layers=top_layers,
+                bottom_layers=bottom_layers,
+                material_density_g_cm3=material_density_g_cm3,
+                material_price_eur_per_kg=material_price_eur_per_kg,
+                support_density_g_cm3=support_density_g_cm3,
+                support_price_eur_per_kg=support_price_eur_per_kg,
+                material_display_name=material_display_name,
+                support_material_display_name=support_material_display_name,
+            )
+        except OrcaSliceError as exc:
+            if support_material_type != "none":
+                raise
+
+            initial_slice_error = str(exc)
+            effective_support_material_type = "breakaway"
+            support_fallback_applied = True
+            result = run_orca_with_profiles(
+                stl_path=tmp_input,
+                material_profile=material_profile,
+                support_material_type="breakaway",
+                infill_percent=infill_percent,
+                perimeter_count=perimeter_count,
+                top_layers=top_layers,
+                bottom_layers=bottom_layers,
+                material_density_g_cm3=material_density_g_cm3,
+                material_price_eur_per_kg=material_price_eur_per_kg,
+                support_density_g_cm3=material_density_g_cm3,
+                support_price_eur_per_kg=material_price_eur_per_kg,
+                material_display_name=material_display_name,
+                support_material_display_name=material_display_name,
+            )
 
         return {
             "success": True,
             "filename": filename,
             "method": "slice",
             "material_profile": material_profile,
-            "support_material_type": support_material_type,
+            "requested_support_material_type": requested_support_material_type,
+            "support_material_type": effective_support_material_type,
+            "support_fallback_applied": support_fallback_applied,
+            "support_fallback_reason": initial_slice_error if support_fallback_applied else None,
             "applied_slicer_settings": {
                 "infill_percent": infill_percent,
                 "perimeter_count": perimeter_count,
