@@ -4,7 +4,7 @@
 
 The 3D Model Analysis Service accepts uploaded STEP or STL files, converts them when necessary, slices them using an Orca worker, calculates material and machine costs, generates a preview image, and exposes the result through an asynchronous job API.
 
-The service is designed for integration with Odoo and similar systems that need reliable, sequential processing of potentially expensive slicing jobs.
+The service is designed for integration with Odoo and similar systems that need reliable, bounded parallel processing of potentially expensive slicing jobs.
 
 ---
 
@@ -12,7 +12,7 @@ The service is designed for integration with Odoo and similar systems that need 
 
 * Upload STEP and STL files
 * Automatic STEP to STL conversion
-* Sequential job queue processing
+* Configurable parallel job queue processing (1-5 workers)
 * Orca slicer integration through a dedicated worker
 * Preview image generation from STL
 * Material, support, and machine cost calculation
@@ -38,7 +38,7 @@ This FastAPI application:
 
 A background worker loop:
 
-* pulls the next queued job
+* atomically claims the next queued job
 * converts STEP to STL if needed
 * renders a preview image
 * calls the Orca worker for slicing
@@ -69,7 +69,7 @@ SQLite-backed job persistence for:
 
 1. Client uploads STEP or STL file to `POST /analyze-model/jobs`
 2. Service stores file and metadata, returns a `job_id`
-3. Background worker claims the next queued job
+3. One of the configured background workers atomically claims the next queued job
 4. STEP files are converted to STL
 5. Preview image is rendered from STL
 6. STL is sent to Orca worker for slicing
@@ -77,6 +77,25 @@ SQLite-backed job persistence for:
 8. Client polls `GET /analyze-model/jobs/{job_id}`
 9. Once complete, client retrieves the result
 10. Client calls `DELETE /analyze-model/jobs/{job_id}` to clean up
+
+---
+
+
+## V3 Parallel Analysis Workers
+
+The analysis service can process several jobs concurrently. Configure the pool with:
+
+```bash
+ANALYSIS_MAX_WORKERS=5
+```
+
+Valid effective values are **1 to 5**. The default is **3** and values above 5 are clamped to 5 to avoid accidentally launching an unbounded number of OrcaSlicer processes.
+
+Job claiming is atomic at SQLite level using `BEGIN IMMEDIATE` plus a guarded status update. This prevents two workers (including workers from separate service processes sharing the same database) from processing the same queued job.
+
+The Orca worker moves the blocking OrcaSlicer subprocess into a thread so concurrent HTTP slice requests can actually execute in parallel. Keep the worker count appropriate for available CPU and RAM.
+
+`GET /health` reports `analysis_workers_configured` and `analysis_workers_alive`.
 
 ---
 

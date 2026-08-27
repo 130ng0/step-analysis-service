@@ -10,6 +10,7 @@ services:
     environment:
       STEP_SERVICE_API_KEY: "${STEP_SERVICE_API_KEY}"
       MAX_FILE_SIZE_MB: "${MAX_FILE_SIZE_MB}"
+      ANALYSIS_MAX_WORKERS: "${ANALYSIS_MAX_WORKERS:-5}"
       ORCA_WORKER_URL: "http://orca-worker:8090"
       ORCA_WORKER_TIMEOUT: "1800"
     depends_on:

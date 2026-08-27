@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import math
 import os
 import re
@@ -63,7 +64,11 @@ async def slice_model(
             tmp.write(file_bytes)
             tmp_input = tmp.name
 
-        result = run_orca_with_profiles(
+        # OrcaSlicer is a blocking subprocess. Run it outside the FastAPI event
+        # loop so multiple slice requests from the analysis worker pool can be
+        # processed concurrently. The upstream service limits concurrency.
+        result = await asyncio.to_thread(
+            run_orca_with_profiles,
             stl_path=tmp_input,
             material_profile=material_profile,
             support_material_type=support_material_type,

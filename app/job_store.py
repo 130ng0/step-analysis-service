@@ -137,8 +137,7 @@ def claim_next_job() -> dict[str, Any] | None:
     """Atomically claim the oldest queued job.
 
     BEGIN IMMEDIATE serializes claimers at SQLite level, so this remains safe if
-    the service is later started with multiple worker processes. The current
-    worker_loop still processes one job at a time.
+    the service is later started with multiple worker processes. Each worker processes one job at a time; multiple configured workers may claim jobs concurrently.
     """
     with _db_lock:
         conn = _connect()

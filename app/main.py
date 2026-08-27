@@ -11,7 +11,7 @@ import requests
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse
 
-from app.config import ALLOWED_EXTENSIONS, MAX_FILE_SIZE_BYTES
+from app.config import ALLOWED_EXTENSIONS, ANALYSIS_MAX_WORKERS, MAX_FILE_SIZE_BYTES
 from app.schemas import ErrorResponse
 from app.security import verify_api_key
 from app.services.slice_input_converter import SliceInputConversionError, convert_upload_to_stl_bytes
@@ -34,7 +34,7 @@ logger = logging.getLogger("step-analysis-service")
 
 app = FastAPI(
     title="3D Model Analysis Service",
-    version="2.5.1",
+    version="2.6.0",
     docs_url="/docs",
     redoc_url="/redoc",
 )
@@ -46,7 +46,21 @@ ORCA_WORKER_TIMEOUT = int(os.getenv("ORCA_WORKER_TIMEOUT", "1800"))
 @app.on_event("startup")
 async def startup_event():
     init_db()
-    asyncio.create_task(worker_loop())
+    app.state.analysis_worker_tasks = [
+        asyncio.create_task(worker_loop(worker_id))
+        for worker_id in range(1, ANALYSIS_MAX_WORKERS + 1)
+    ]
+    logger.info("analysis_worker_pool_started workers=%s", ANALYSIS_MAX_WORKERS)
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    tasks = list(getattr(app.state, "analysis_worker_tasks", []))
+    for task in tasks:
+        task.cancel()
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
+    logger.info("analysis_worker_pool_stopped workers=%s", len(tasks))
 
 
 @app.middleware("http")
@@ -88,9 +102,14 @@ def health():
     except Exception:
         worker_status = "unreachable"
 
+    tasks = list(getattr(app.state, "analysis_worker_tasks", []))
+    alive_workers = sum(1 for task in tasks if not task.done())
+
     return {
         "status": "ok",
         "orca_worker": worker_status,
+        "analysis_workers_configured": ANALYSIS_MAX_WORKERS,
+        "analysis_workers_alive": alive_workers,
     }
 
 

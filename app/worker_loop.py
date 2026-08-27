@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import math
 import time
 
-from app.job_store import claim_next_job, get_job_dir, mark_done, mark_error
 from app.services.model_analysis import render_preview_from_converted_stl_bytes
 from app.services.orca_client import OrcaClientError, slice_with_worker
 from app.services.slice_input_converter import SliceInputConversionError, convert_upload_to_stl_bytes
@@ -16,6 +16,8 @@ from app.job_store import (
     mark_error,
     update_job_progress,
 )
+
+logger = logging.getLogger("step-analysis-service.worker")
 
 
 def process_job_sync(job: dict) -> None:
@@ -114,11 +116,22 @@ def process_job_sync(job: dict) -> None:
         mark_error(job_id, "INTERNAL_SERVER_ERROR", str(exc))
 
 
-async def worker_loop(poll_seconds: float = 1.0) -> None:
-    while True:
-        job = claim_next_job()
-        if not job:
-            await asyncio.sleep(poll_seconds)
-            continue
+async def worker_loop(worker_id: int, poll_seconds: float = 1.0) -> None:
+    logger.info("analysis_worker_started worker_id=%s", worker_id)
+    try:
+        while True:
+            job = claim_next_job()
+            if not job:
+                await asyncio.sleep(poll_seconds)
+                continue
 
-        await asyncio.to_thread(process_job_sync, job)
+            logger.info(
+                "analysis_worker_claimed worker_id=%s job_id=%s filename=%s",
+                worker_id,
+                job.get("job_id"),
+                job.get("filename"),
+            )
+            await asyncio.to_thread(process_job_sync, job)
+    except asyncio.CancelledError:
+        logger.info("analysis_worker_stopped worker_id=%s", worker_id)
+        raise
