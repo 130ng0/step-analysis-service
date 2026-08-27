@@ -11,7 +11,7 @@ import requests
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse
 
-from app.config import ALLOWED_EXTENSIONS, ANALYSIS_WORKER_COUNT, MAX_FILE_SIZE_BYTES
+from app.config import ALLOWED_EXTENSIONS, MAX_FILE_SIZE_BYTES
 from app.schemas import ErrorResponse
 from app.security import verify_api_key
 from app.services.slice_input_converter import SliceInputConversionError, convert_upload_to_stl_bytes
@@ -34,7 +34,7 @@ logger = logging.getLogger("step-analysis-service")
 
 app = FastAPI(
     title="3D Model Analysis Service",
-    version="2.7.0",
+    version="2.5.1",
     docs_url="/docs",
     redoc_url="/redoc",
 )
@@ -46,8 +46,7 @@ ORCA_WORKER_TIMEOUT = int(os.getenv("ORCA_WORKER_TIMEOUT", "1800"))
 @app.on_event("startup")
 async def startup_event():
     init_db()
-    for worker_number in range(1, ANALYSIS_WORKER_COUNT + 1):
-        asyncio.create_task(worker_loop(worker_name=f"analysis-{worker_number}"))
+    asyncio.create_task(worker_loop())
 
 
 @app.middleware("http")
@@ -92,7 +91,6 @@ def health():
     return {
         "status": "ok",
         "orca_worker": worker_status,
-        "analysis_worker_count": ANALYSIS_WORKER_COUNT,
     }
 
 

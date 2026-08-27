@@ -134,9 +134,16 @@ def get_job(job_id: str) -> dict[str, Any] | None:
 
 
 def claim_next_job() -> dict[str, Any] | None:
+    """Atomically claim the oldest queued job.
+
+    BEGIN IMMEDIATE serializes claimers at SQLite level, so this remains safe if
+    the service is later started with multiple worker processes. The current
+    worker_loop still processes one job at a time.
+    """
     with _db_lock:
         conn = _connect()
         try:
+            conn.execute("BEGIN IMMEDIATE")
             row = conn.execute(
                 """
                 SELECT * FROM jobs
@@ -147,10 +154,11 @@ def claim_next_job() -> dict[str, Any] | None:
             ).fetchone()
 
             if not row:
+                conn.commit()
                 return None
 
             job_id = row["job_id"]
-            cursor = conn.execute(
+            cur = conn.execute(
                 """
                 UPDATE jobs
                 SET status = ?, started_at = ?, phase = ?, progress_percent = ?, eta_seconds = ?
@@ -158,15 +166,18 @@ def claim_next_job() -> dict[str, Any] | None:
                 """,
                 ("processing", utc_now_iso(), "queued", 1, None, job_id),
             )
-            conn.commit()
-
-            if cursor.rowcount != 1:
+            if cur.rowcount != 1:
+                conn.rollback()
                 return None
 
             updated = conn.execute(
                 "SELECT * FROM jobs WHERE job_id = ?",
                 (job_id,),
             ).fetchone()
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
         finally:
             conn.close()
 
@@ -176,7 +187,6 @@ def claim_next_job() -> dict[str, Any] | None:
     result = dict(updated)
     result["request_json"] = json.loads(result["request_json"])
     return result
-
 
 def mark_done(job_id: str, result_payload: dict[str, Any]) -> None:
     with _db_lock:

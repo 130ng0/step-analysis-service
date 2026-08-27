@@ -12,7 +12,6 @@ services:
       MAX_FILE_SIZE_MB: "${MAX_FILE_SIZE_MB}"
       ORCA_WORKER_URL: "http://orca-worker:8090"
       ORCA_WORKER_TIMEOUT: "1800"
-      ANALYSIS_WORKER_COUNT: "${ANALYSIS_WORKER_COUNT:-2}"
     depends_on:
       - orca-worker
 
@@ -24,4 +23,3 @@ services:
     restart: unless-stopped
     environment:
       KEEP_TMP: "${KEEP_TMP_ORCA}"
-      ORCA_WORKER_COUNT: "${ORCA_WORKER_COUNT:-2}"
