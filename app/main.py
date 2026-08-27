@@ -11,13 +11,20 @@ import requests
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse
 
-from app.config import ALLOWED_EXTENSIONS, ANALYSIS_MAX_WORKERS, MAX_FILE_SIZE_BYTES
+from app.config import (
+    ALLOWED_EXTENSIONS,
+    ANALYSIS_MAX_WORKERS,
+    JOB_CLEANUP_INTERVAL_SECONDS,
+    JOB_RESULT_RETENTION_SECONDS,
+    MAX_FILE_SIZE_BYTES,
+)
 from app.schemas import ErrorResponse
 from app.security import verify_api_key
 from app.services.slice_input_converter import SliceInputConversionError, convert_upload_to_stl_bytes
 from app.services.model_analysis import render_preview_from_converted_stl_bytes
 
 from app.job_store import (
+    cleanup_expired_terminal_jobs,
     create_job,
     delete_job,
     get_job,
@@ -25,6 +32,7 @@ from app.job_store import (
     get_queue_position,
     init_db,
     mark_consumed,
+    requeue_interrupted_jobs,
 )
 
 from app.worker_loop import worker_loop
@@ -34,7 +42,7 @@ logger = logging.getLogger("step-analysis-service")
 
 app = FastAPI(
     title="3D Model Analysis Service",
-    version="2.6.0",
+    version="2.10.0",
     docs_url="/docs",
     redoc_url="/redoc",
 )
@@ -43,24 +51,51 @@ ORCA_WORKER_URL = os.getenv("ORCA_WORKER_URL", "http://orca-worker:8090")
 ORCA_WORKER_TIMEOUT = int(os.getenv("ORCA_WORKER_TIMEOUT", "1800"))
 
 
+async def terminal_job_cleanup_loop() -> None:
+    while True:
+        await asyncio.sleep(JOB_CLEANUP_INTERVAL_SECONDS)
+        try:
+            deleted = await asyncio.to_thread(
+                cleanup_expired_terminal_jobs, JOB_RESULT_RETENTION_SECONDS
+            )
+            if deleted:
+                logger.info("terminal_job_retention_cleanup deleted=%s", deleted)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("terminal_job_retention_cleanup_failed")
+
+
 @app.on_event("startup")
 async def startup_event():
     init_db()
+    requeued = requeue_interrupted_jobs()
+    if requeued:
+        logger.warning("analysis_jobs_requeued_after_restart count=%s", requeued)
+
     app.state.analysis_worker_tasks = [
         asyncio.create_task(worker_loop(worker_id))
         for worker_id in range(1, ANALYSIS_MAX_WORKERS + 1)
     ]
-    logger.info("analysis_worker_pool_started workers=%s", ANALYSIS_MAX_WORKERS)
+    app.state.job_cleanup_task = asyncio.create_task(terminal_job_cleanup_loop())
+    logger.info(
+        "analysis_worker_pool_started workers=%s result_retention_seconds=%s",
+        ANALYSIS_MAX_WORKERS,
+        JOB_RESULT_RETENTION_SECONDS,
+    )
 
 
 @app.on_event("shutdown")
 async def shutdown_event():
     tasks = list(getattr(app.state, "analysis_worker_tasks", []))
+    cleanup_task = getattr(app.state, "job_cleanup_task", None)
+    if cleanup_task:
+        tasks.append(cleanup_task)
     for task in tasks:
         task.cancel()
     if tasks:
         await asyncio.gather(*tasks, return_exceptions=True)
-    logger.info("analysis_worker_pool_stopped workers=%s", len(tasks))
+    logger.info("analysis_worker_pool_stopped tasks=%s", len(tasks))
 
 
 @app.middleware("http")
@@ -110,6 +145,7 @@ def health():
         "orca_worker": worker_status,
         "analysis_workers_configured": ANALYSIS_MAX_WORKERS,
         "analysis_workers_alive": alive_workers,
+        "job_result_retention_seconds": JOB_RESULT_RETENTION_SECONDS,
     }
 
 

@@ -5,6 +5,7 @@ import os
 import sqlite3
 import threading
 import uuid
+import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -255,23 +256,108 @@ def delete_job(job_id: str) -> bool:
         finally:
             conn.close()
 
-    if job_dir.exists():
-        for path in sorted(job_dir.glob("**/*"), reverse=True):
-            try:
-                if path.is_file():
-                    path.unlink()
-            except Exception:
-                pass
-        try:
-            for path in sorted(job_dir.glob("**/*"), reverse=True):
-                if path.is_dir():
-                    path.rmdir()
-            job_dir.rmdir()
-        except Exception:
-            pass
-
+    cleanup_job_files(job_id)
     return deleted
 
+
+
+def cleanup_job_files(job_id: str) -> None:
+    """Remove all uploaded/derived files for a terminal job.
+
+    The SQLite row is intentionally kept until Odoo has consumed the terminal
+    result (or retention cleanup removes it). This makes GET of a finished job
+    idempotent while ensuring binary/temporary job data is deleted immediately.
+    """
+    job_dir = JOB_FILES_DIR / job_id
+    if not job_dir.exists():
+        return
+    try:
+        shutil.rmtree(job_dir)
+    except FileNotFoundError:
+        pass
+
+
+def requeue_interrupted_jobs() -> int:
+    """Requeue jobs left in processing state after an unclean service restart.
+
+    Only jobs whose input file still exists can be resumed. Jobs without input
+    data are marked as an error instead of remaining stuck forever.
+    """
+    with _db_lock:
+        conn = _connect()
+        try:
+            rows = conn.execute(
+                "SELECT job_id FROM jobs WHERE status = 'processing'"
+            ).fetchall()
+            requeued = 0
+            for row in rows:
+                job_id = row["job_id"]
+                input_path = JOB_FILES_DIR / job_id / "input.bin"
+                if input_path.exists():
+                    conn.execute(
+                        """
+                        UPDATE jobs
+                        SET status = 'queued', started_at = NULL, phase = 'queued',
+                            progress_percent = 0, eta_seconds = NULL
+                        WHERE job_id = ? AND status = 'processing'
+                        """,
+                        (job_id,),
+                    )
+                    requeued += 1
+                else:
+                    conn.execute(
+                        """
+                        UPDATE jobs
+                        SET status = 'error', finished_at = ?, error_code = ?,
+                            error_details = ?, phase = 'error', eta_seconds = 0
+                        WHERE job_id = ? AND status = 'processing'
+                        """,
+                        (utc_now_iso(), 'JOB_INPUT_MISSING_AFTER_RESTART',
+                         'Job input file is missing after service restart', job_id),
+                    )
+            conn.commit()
+            return requeued
+        finally:
+            conn.close()
+
+
+def cleanup_expired_terminal_jobs(retention_seconds: int) -> int:
+    """Delete terminal SQLite rows older than the configured retention.
+
+    Job files are already removed immediately when processing finishes. The
+    short-lived terminal row exists only to make result delivery idempotent.
+    """
+    if retention_seconds <= 0:
+        return 0
+
+    from datetime import timedelta
+
+    cutoff = (datetime.now(timezone.utc) - timedelta(seconds=retention_seconds)).isoformat()
+    with _db_lock:
+        conn = _connect()
+        try:
+            rows = conn.execute(
+                """
+                SELECT job_id FROM jobs
+                WHERE status IN ('done', 'error')
+                  AND finished_at IS NOT NULL
+                  AND finished_at < ?
+                """,
+                (cutoff,),
+            ).fetchall()
+            job_ids = [row['job_id'] for row in rows]
+            if job_ids:
+                conn.executemany(
+                    "DELETE FROM jobs WHERE job_id = ?",
+                    [(job_id,) for job_id in job_ids],
+                )
+            conn.commit()
+        finally:
+            conn.close()
+
+    for job_id in job_ids:
+        cleanup_job_files(job_id)
+    return len(job_ids)
 
 def get_queue_position(job_id: str) -> int | None:
     job = get_job(job_id)

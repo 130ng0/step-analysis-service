@@ -11,6 +11,7 @@ from app.services.orca_client import OrcaClientError, slice_with_worker
 from app.services.slice_input_converter import SliceInputConversionError, convert_upload_to_stl_bytes
 from app.job_store import (
     claim_next_job,
+    cleanup_job_files,
     get_job_dir,
     mark_done,
     mark_error,
@@ -105,7 +106,6 @@ def process_job_sync(job: dict) -> None:
             "preview_png_base64": preview_png_base64,
         }
 
-        (job_dir / "result.json").write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
         mark_done(job_id, result)
 
     except SliceInputConversionError as exc:
@@ -113,7 +113,14 @@ def process_job_sync(job: dict) -> None:
     except OrcaClientError as exc:
         mark_error(job_id, "SLICE_FAILED", str(exc))
     except Exception as exc:
+        logger.exception("analysis_job_failed job_id=%s filename=%s", job_id, filename)
         mark_error(job_id, "INTERNAL_SERVER_ERROR", str(exc))
+    finally:
+        # Binary input, converted artefacts and preview/result helper files must
+        # never accumulate on the service. The terminal result/error itself is
+        # already persisted in SQLite before this cleanup and can still be
+        # fetched idempotently by Odoo.
+        cleanup_job_files(job_id)
 
 
 async def worker_loop(worker_id: int, poll_seconds: float = 1.0) -> None:

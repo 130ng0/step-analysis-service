@@ -2,20 +2,18 @@ from __future__ import annotations
 
 import base64
 import io
+import logging
 import os
 import tempfile
-import math
-import numpy as np
+import threading
 
-import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
-import trimesh
-from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 
 from app.config import ALLOWED_EXTENSIONS
 from PIL import Image, ImageChops
-from mpl_toolkits.mplot3d.art3d import Line3DCollection
+
+_PREVIEW_RENDER_LOCK = threading.Lock()
+logger = logging.getLogger("step-analysis-service.preview")
+
 
 class ModelAnalysisError(Exception):
     pass
@@ -34,27 +32,6 @@ def _detect_format(filename: str) -> str:
     raise UnsupportedFileFormatError(
         f"Allowed formats: {', '.join(ALLOWED_EXTENSIONS)}"
     )
-
-
-def _load_stl_mesh(path: str) -> trimesh.Trimesh:
-    mesh = trimesh.load_mesh(path, file_type="stl")
-
-    if mesh is None:
-        raise ModelAnalysisError("No mesh could be imported from STL file")
-
-    if isinstance(mesh, trimesh.Scene):
-        geometries = [g for g in mesh.geometry.values() if g is not None and not g.is_empty]
-        if not geometries:
-            raise ModelAnalysisError("STL scene does not contain usable mesh geometry")
-        mesh = trimesh.util.concatenate(geometries)
-
-    if mesh.is_empty:
-        raise ModelAnalysisError("Imported STL mesh is empty")
-
-    if not isinstance(mesh, trimesh.Trimesh):
-        raise ModelAnalysisError("Imported STL is not a valid mesh")
-
-    return mesh
 
 
 def _crop_png_whitespace(png_bytes: bytes, padding: int = 20) -> bytes:
@@ -91,149 +68,213 @@ def _crop_png_whitespace(png_bytes: bytes, padding: int = 20) -> bytes:
         return png_bytes
 
 
-def _view_direction(elev_deg: float = 22.0, azim_deg: float = -55.0):
-    elev = math.radians(elev_deg)
-    azim = math.radians(azim_deg)
+def _vtk_png_bytes_from_render_window(render_window) -> bytes:
+    """Capture the current VTK render window into PNG bytes."""
+    import vtk
 
-    return np.array([
-        math.cos(elev) * math.cos(azim),
-        math.cos(elev) * math.sin(azim),
-        math.sin(elev),
-    ])
+    capture = vtk.vtkWindowToImageFilter()
+    capture.SetInput(render_window)
+    capture.SetInputBufferTypeToRGB()
+    capture.ReadFrontBufferOff()
+    capture.Update()
 
-
-def _extract_feature_edges(mesh: trimesh.Trimesh, angle_threshold_deg: float = 35.0):
-    edges = []
-
-    try:
-        view_dir = _view_direction()
-        face_normals = mesh.face_normals
-        threshold = math.cos(math.radians(angle_threshold_deg))
-
-        for edge, faces in zip(mesh.face_adjacency_edges, mesh.face_adjacency):
-            n1 = face_normals[faces[0]]
-            n2 = face_normals[faces[1]]
-
-            # nur Kanten zeichnen, wenn mindestens eine angrenzende Fläche zur Kamera zeigt
-            visible = (np.dot(n1, view_dir) > -0.15) or (np.dot(n2, view_dir) > -0.15)
-            if not visible:
-                continue
-
-            dot = float(np.dot(n1, n2))
-
-            # nur harte/markante Kanten, kein STL-Dreiecksnetz
-            if dot < threshold:
-                p1 = mesh.vertices[edge[0]]
-                p2 = mesh.vertices[edge[1]]
-                edges.append([p1, p2])
-
-    except Exception:
-        return []
-
-    return edges
+    writer = vtk.vtkPNGWriter()
+    writer.SetWriteToMemory(True)
+    writer.SetInputConnection(capture.GetOutputPort())
+    writer.Write()
+    result = writer.GetResult()
+    return bytes(memoryview(result))
 
 
-def render_stl_preview_png_base64(stl_bytes: bytes) -> str | None:
-    """
-    Rendert ein einfaches PNG-Preview aus STL-Bytes.
-    Rückgabe als base64-String ohne data:-Prefix.
+def _render_stl_preview_png_base64_unlocked(stl_bytes: bytes) -> str | None:
+    """Render an opaque CAD preview using VTK's real depth buffer.
+
+    V3.4 deliberately does not overlay Matplotlib 3D lines.  VTK renders the
+    solid mesh, feature edges and silhouette through the same depth buffer, so
+    back-side engraving/text and hidden geometry cannot bleed through the front
+    surface.  A dedicated silhouette pass keeps the complete outer contour
+    visible even where adjacent faces have a shallow angle.
     """
     if not stl_bytes:
         return None
 
+    import vtk
+
     tmp_path = None
-    fig = None
+    render_window = None
 
     try:
         with tempfile.NamedTemporaryFile(delete=False, suffix=".stl") as tmp:
             tmp.write(stl_bytes)
             tmp_path = tmp.name
 
-        mesh = _load_stl_mesh(tmp_path)
-
-        if mesh.is_empty or len(mesh.faces) == 0:
+        reader = vtk.vtkSTLReader()
+        reader.SetFileName(tmp_path)
+        reader.Update()
+        polydata = reader.GetOutput()
+        if polydata is None or polydata.GetNumberOfCells() == 0:
             return None
 
-        mesh = mesh.copy()
-        mesh.apply_translation(-mesh.bounding_box.centroid)
+        # Clean/merge STL vertices first. STEP->STL triangulation often stores
+        # duplicated points per triangle; feature extraction must operate on the
+        # welded topology or real CAD edges can disappear / false boundaries can
+        # appear. Surface normals are a separate shading pipeline.
+        clean = vtk.vtkCleanPolyData()
+        clean.SetInputData(polydata)
+        clean.PointMergingOn()
+        clean.Update()
 
-        vertices = mesh.vertices
-        faces = mesh.faces
-        triangles = vertices[faces]
+        normals = vtk.vtkPolyDataNormals()
+        normals.SetInputConnection(clean.GetOutputPort())
+        normals.ConsistencyOn()
+        normals.AutoOrientNormalsOn()
+        normals.SplittingOn()
+        normals.SetFeatureAngle(38.0)
+        normals.Update()
 
-        fig = plt.figure(figsize=(5, 5), dpi=160)
-        ax = fig.add_subplot(111, projection="3d")
+        surface_mapper = vtk.vtkPolyDataMapper()
+        surface_mapper.SetInputConnection(normals.GetOutputPort())
+        surface_mapper.ScalarVisibilityOff()
 
-        fig.patch.set_facecolor("white")
-        ax.set_facecolor("white")
+        surface = vtk.vtkActor()
+        surface.SetMapper(surface_mapper)
+        prop = surface.GetProperty()
+        prop.SetColor(0.17, 0.18, 0.20)
+        prop.SetOpacity(1.0)
+        prop.SetInterpolationToPhong()
+        prop.SetAmbient(0.30)
+        prop.SetDiffuse(0.78)
+        prop.SetSpecular(0.10)
+        prop.SetSpecularPower(18.0)
 
-        poly = Poly3DCollection(
-            triangles,
-            linewidths=0,
-            edgecolors="none",
-        )
+        renderer = vtk.vtkRenderer()
+        renderer.SetBackground(1.0, 1.0, 1.0)
+        renderer.AddActor(surface)
 
-        # komplett deckende Oberfläche
-        poly.set_facecolor((0.72, 0.72, 0.78, 1.0))
-        poly.set_alpha(1.0)
+        render_window = vtk.vtkRenderWindow()
+        render_window.SetOffScreenRendering(1)
+        render_window.SetSize(700, 560)
+        render_window.SetMultiSamples(8)
+        render_window.AddRenderer(renderer)
 
-        ax.add_collection3d(poly)
+        # Use the same useful isometric family as the old preview, but view the
+        # exterior/blank side for this reference part.  Orthographic projection
+        # is closer to CAD thumbnails and keeps dimensions visually stable.
+        camera = renderer.GetActiveCamera()
+        renderer.ResetCamera()
+        camera.Azimuth(-52.0)
+        camera.Elevation(-24.0)
+        camera.OrthogonalizeViewUp()
+        camera.ParallelProjectionOn()
+        camera.SetParallelScale(camera.GetParallelScale() * 1.08)
+        renderer.ResetCameraClippingRange()
 
-        feature_edges = _extract_feature_edges(
-            mesh,
-            angle_threshold_deg=35.0,
-        )
+        # True structural feature edges. They are rendered as geometry inside
+        # VTK, so the depth test hides edges on the far side of the solid.
+        feature_edges = vtk.vtkFeatureEdges()
+        feature_edges.SetInputConnection(clean.GetOutputPort())
+        feature_edges.BoundaryEdgesOn()
+        feature_edges.FeatureEdgesOn()
+        feature_edges.SetFeatureAngle(18.0)
+        feature_edges.ManifoldEdgesOff()
+        feature_edges.NonManifoldEdgesOn()
 
-        if feature_edges:
-            edge_collection = Line3DCollection(
-                feature_edges,
-                colors=[(0.15, 0.15, 0.18, 0.85)],
-                linewidths=0.9,
-            )
-            ax.add_collection3d(edge_collection)
+        # Render feature edges as thin 3D tubes instead of OpenGL line
+        # primitives. Tubes participate in the regular depth buffer and cannot
+        # bleed through an opaque front face. The radius scales with model size.
+        bounds = clean.GetOutput().GetBounds()
+        dx = bounds[1] - bounds[0]
+        dy = bounds[3] - bounds[2]
+        dz = bounds[5] - bounds[4]
+        diag = max((dx * dx + dy * dy + dz * dz) ** 0.5, 1e-6)
 
-        bounds = mesh.bounds
-        mins = bounds[0]
-        maxs = bounds[1]
-        center = (mins + maxs) / 2.0
-        size = float((maxs - mins).max())
-        if size <= 0:
-            size = 1.0
-        half = size / 2.0
+        feature_tubes = vtk.vtkTubeFilter()
+        feature_tubes.SetInputConnection(feature_edges.GetOutputPort())
+        feature_tubes.SetRadius(diag * 0.00105)
+        feature_tubes.SetNumberOfSides(6)
+        feature_tubes.CappingOn()
 
-        ax.set_xlim(center[0] - half, center[0] + half)
-        ax.set_ylim(center[1] - half, center[1] + half)
-        ax.set_zlim(center[2] - half, center[2] + half)
+        feature_mapper = vtk.vtkPolyDataMapper()
+        feature_mapper.SetInputConnection(feature_tubes.GetOutputPort())
+        feature_mapper.ScalarVisibilityOff()
+        feature_actor = vtk.vtkActor()
+        feature_actor.SetMapper(feature_mapper)
+        feature_actor.GetProperty().SetColor(0.018, 0.020, 0.024)
+        feature_actor.GetProperty().SetAmbient(1.0)
+        feature_actor.GetProperty().SetDiffuse(0.0)
+        renderer.AddActor(feature_actor)
 
-        ax.view_init(elev=22, azim=-55)
-        ax.set_axis_off()
-        plt.tight_layout(pad=0)
+        # Independent silhouette extraction fixes missing outside contours such
+        # as the upper-left edge reported on the Raspberry case lid.
+        silhouette = vtk.vtkPolyDataSilhouette()
+        silhouette.SetInputConnection(clean.GetOutputPort())
+        silhouette.SetCamera(camera)
+        silhouette.SetEnableFeatureAngle(0)
+        silhouette.SetBorderEdges(1)
+        silhouette.SetPieceInvariant(1)
 
-        buf = io.BytesIO()
-        plt.savefig(
-            buf,
-            format="png",
-            bbox_inches="tight",
-            pad_inches=0.0,
-            transparent=False,
-            facecolor="white",
-        )
+        silhouette_tubes = vtk.vtkTubeFilter()
+        silhouette_tubes.SetInputConnection(silhouette.GetOutputPort())
+        silhouette_tubes.SetRadius(diag * 0.00135)
+        silhouette_tubes.SetNumberOfSides(6)
+        silhouette_tubes.CappingOn()
 
-        png_bytes = _crop_png_whitespace(buf.getvalue(), padding=18)
+        silhouette_mapper = vtk.vtkPolyDataMapper()
+        silhouette_mapper.SetInputConnection(silhouette_tubes.GetOutputPort())
+        silhouette_mapper.ScalarVisibilityOff()
+        silhouette_actor = vtk.vtkActor()
+        silhouette_actor.SetMapper(silhouette_mapper)
+        silhouette_actor.GetProperty().SetColor(0.0, 0.0, 0.0)
+        silhouette_actor.GetProperty().SetAmbient(1.0)
+        silhouette_actor.GetProperty().SetDiffuse(0.0)
+        renderer.AddActor(silhouette_actor)
 
+        # Two soft lights make steps and recesses obvious without blowing out
+        # vertical faces. The actor remains fully opaque at all times.
+        renderer.RemoveAllLights()
+        key = vtk.vtkLight()
+        key.SetLightTypeToSceneLight()
+        key.SetPosition(-1.0, -1.2, 2.0)
+        key.SetFocalPoint(0.0, 0.0, 0.0)
+        key.SetIntensity(0.95)
+        renderer.AddLight(key)
+
+        fill = vtk.vtkLight()
+        fill.SetLightTypeToSceneLight()
+        fill.SetPosition(1.2, 0.8, 1.0)
+        fill.SetFocalPoint(0.0, 0.0, 0.0)
+        fill.SetIntensity(0.38)
+        renderer.AddLight(fill)
+
+        render_window.Render()
+        png_bytes = _vtk_png_bytes_from_render_window(render_window)
+        png_bytes = _crop_png_whitespace(png_bytes, padding=20)
         return base64.b64encode(png_bytes).decode("ascii")
 
     except Exception:
+        logger.exception("preview_render_failed")
         return None
 
     finally:
-        if fig is not None:
-            plt.close(fig)
+        if render_window is not None:
+            try:
+                render_window.Finalize()
+            except Exception:
+                pass
         if tmp_path and os.path.exists(tmp_path):
             try:
                 os.unlink(tmp_path)
             except Exception:
                 pass
+
+def render_stl_preview_png_base64(stl_bytes: bytes) -> str | None:
+    """Thread-safe wrapper around off-screen VTK preview rendering.
+
+    Preview rendering remains serialized because off-screen graphics contexts are
+    not guaranteed to be thread-safe. Conversion and Orca slicing stay parallel.
+    """
+    with _PREVIEW_RENDER_LOCK:
+        return _render_stl_preview_png_base64_unlocked(stl_bytes)
 
 
 def render_preview_from_converted_stl_bytes(stl_bytes: bytes) -> str | None:

@@ -18,7 +18,6 @@ from resolve_profiles import ResolveProfilesError, resolve_profile_set
 
 app = FastAPI(title="Orca Worker API", version="2.3.0")
 
-KEEP_TMP = os.getenv("KEEP_TMP", "false").lower() == "true"
 ORCA_PATH = "/opt/orca/squashfs-root/AppRun"
 FILAMENT_DIAMETER_MM_DEFAULT = 1.75
 
@@ -310,14 +309,13 @@ def run_orca_with_profiles(
         if proc.returncode != 0:
             raise OrcaSliceError(
                 f"Orca failed with code {proc.returncode}\n"
-                f"Temp dir kept at: {tmpdir}\n"
                 f"STDOUT:\n{proc.stdout}\n"
                 f"STDERR:\n{proc.stderr}"
             )
 
         gcode_path = output_dir / "plate_1.gcode"
         if not gcode_path.exists():
-            raise OrcaSliceError(f"plate_1.gcode was not generated\nTemp dir kept at: {tmpdir}")
+            raise OrcaSliceError("plate_1.gcode was not generated")
 
         result = parse_gcode(
             str(gcode_path),
@@ -325,17 +323,13 @@ def run_orca_with_profiles(
             support_filament_metadata=support_filament_metadata,
         )
 
-        # Nur bei Erfolg aufräumen? Falls du tmp behalten willst, auskommentieren:
-        if not KEEP_TMP:
-            shutil.rmtree(tmpdir, ignore_errors=True)
-        else:
-            print(f"[DEBUG] tmp dir kept at: {tmpdir}")
-
         return result
 
-    except Exception:
-        # Bei Fehler absichtlich NICHT löschen
-        raise
+    finally:
+        # Job artefacts must never remain on the Orca service, regardless of
+        # success or failure. This includes generated profiles, G-code and all
+        # other per-run files.
+        shutil.rmtree(tmpdir, ignore_errors=True)
 
 
 def _split_csv_header_values(raw: str) -> List[str]:

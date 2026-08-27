@@ -23,3 +23,23 @@ def _analysis_max_workers() -> int:
 
 
 ANALYSIS_MAX_WORKERS = _analysis_max_workers()
+
+
+# Terminal job metadata/result is retained briefly so repeated Odoo polls can
+# read the same result safely. Binary and temporary job files are deleted
+# immediately after each job finishes (success or error).
+def _positive_int_env(name: str, default: int, minimum: int = 1) -> int:
+    raw = os.getenv(name, str(default))
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        value = default
+    return max(minimum, value)
+
+
+JOB_RESULT_RETENTION_SECONDS = _positive_int_env(
+    "JOB_RESULT_RETENTION_SECONDS", 3600, minimum=60
+)
+JOB_CLEANUP_INTERVAL_SECONDS = _positive_int_env(
+    "JOB_CLEANUP_INTERVAL_SECONDS", 60, minimum=10
+)

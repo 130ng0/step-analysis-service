@@ -8,6 +8,7 @@ cadquery==2.4.0
 trimesh==4.4.9
 numpy==1.26.4
 matplotlib==3.8.4
+vtk>=9.2,<10
 
 pydantic==2.7.4
 

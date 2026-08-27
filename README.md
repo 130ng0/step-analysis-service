@@ -12,14 +12,51 @@ The service is designed for integration with Odoo and similar systems that need 
 
 * Upload STEP and STL files
 * Automatic STEP to STL conversion
-* Configurable parallel job queue processing (1-5 workers)
+* Configurable parallel job queue processing (1-10 workers; default 5)
 * Orca slicer integration through a dedicated worker
 * Preview image generation from STL
 * Material, support, and machine cost calculation
 * Polling-based job API for asynchronous integrations
-* Cleanup after result consumption
+* Immediate cleanup of uploaded/derived job files on success and error
+* Idempotent terminal-result handoff with bounded SQLite retention
 
 ---
+
+## V3.4 topology-correct CAD edge rendering
+
+* STEP-to-STL mesh vertices are welded with `vtkCleanPolyData` before CAD edge extraction. This prevents duplicated STL triangle vertices from being mistaken for boundaries and preserves real geometric transitions.
+* Surface normals remain a separate shading pipeline; edge extraction runs on the cleaned original topology rather than the split-normal mesh.
+* Feature edges use an 18 degree dihedral threshold to retain relevant chamfers, recesses, holes and steps without exposing ordinary STL triangulation.
+* Feature edges and silhouettes are rendered as thin 3D tubes. They therefore participate in the normal depth buffer and cannot bleed through opaque front surfaces like line primitives can.
+* Tube radius scales with the model bounding-box diagonal so edge weight remains visually stable across small and large parts.
+* Validated against the supplied multi-part STEP regression set, including Raspberry cases, brackets, clamps, transport locks and sled components.
+
+## V3.3 depth-correct CAD preview rendering
+
+* Fully opaque dark-charcoal CAD surfaces with directional lighting.
+* VTK off-screen rendering uses a real depth buffer, so hidden/back-side engraving, text and geometry cannot bleed through front faces.
+* Depth-tested feature edges highlight holes, slots, ribs, recesses and sharp corners without showing hidden wireframe geometry.
+* A separate silhouette pass guarantees a strong, complete outside contour, including shallow-angle outline segments.
+* Orthographic CAD projection keeps compact Odoo thumbnails geometrically readable.
+* Preview rendering remains serialized for graphics-context safety; analysis/slicing workers remain parallel.
+
+## V3.1 reliability / cleanup
+
+The service now separates **working files** from **terminal result metadata**:
+
+* `input.bin`, converted artefacts, preview helper files, and other per-job files are deleted **immediately when a job finishes**, both for `done` and `error`.
+* The small SQLite terminal row is kept only long enough for Odoo to fetch the result idempotently. Odoo acknowledges the result with `DELETE /analyze-model/jobs/{job_id}` after its own database transaction has committed.
+* As a safety net, stale terminal rows are removed automatically after `JOB_RESULT_RETENTION_SECONDS` (default `3600`).
+* Job state is stored on the persistent Docker volume `step-analysis-job-state`, so queued jobs survive a container restart. Jobs that were `processing` are requeued on startup if their input is still present.
+* Preview rendering uses VTK off-screen rendering with a real depth buffer. Hidden/back-side edges are occluded correctly, while a separate silhouette pass keeps the complete outer contour visible. Rendering stays serialized; slicing remains parallel.
+
+Environment variables:
+
+```text
+ANALYSIS_MAX_WORKERS=5             # allowed 1..10
+JOB_RESULT_RETENTION_SECONDS=3600  # terminal DB safety retention
+JOB_CLEANUP_INTERVAL_SECONDS=60
+```
 
 ## Production Architecture
 
@@ -63,6 +100,14 @@ SQLite-backed job persistence for:
 * failed jobs
 * cleanup after consumption
 
+### V3.3 visibility fixes
+
+* Fully opaque CAD surfaces; no alpha-based face rendering.
+* VTK depth-buffer rendering prevents back-side engraving, text and hidden geometry from bleeding through front faces.
+* Visible feature edges are depth-tested against the solid model.
+* A dedicated silhouette pass draws complete outside contours, including shallow-angle outline segments.
+* Orthographic CAD camera and dark charcoal shading retained for compact Odoo thumbnails.
+
 ---
 
 ## High-Level Request Flow
@@ -89,7 +134,7 @@ The analysis service can process several jobs concurrently. Configure the pool w
 ANALYSIS_MAX_WORKERS=5
 ```
 
-Valid effective values are **1 to 5**. The default is **3** and values above 5 are clamped to 5 to avoid accidentally launching an unbounded number of OrcaSlicer processes.
+Valid effective values are **1 to 10**. The default is **5** and values above 10 are clamped to 10 to avoid accidentally launching an unbounded number of OrcaSlicer processes.
 
 Job claiming is atomic at SQLite level using `BEGIN IMMEDIATE` plus a guarded status update. This prevents two workers (including workers from separate service processes sharing the same database) from processing the same queued job.
 
@@ -326,17 +371,19 @@ app/
     orca_client.py
 ```
 
-Runtime file storage example:
+Runtime storage in Docker Compose:
 
 ```text
-/tmp/step-analysis-jobs/
+/data/
   jobs.db
   files/
     <job_id>/
       input.bin
       input_name.txt
-      result.json
+      preview_base64.txt
 ```
+
+The per-job directory exists only while the job is queued/processing and is deleted immediately on terminal success or error.
 
 ---
 
@@ -347,17 +394,16 @@ Runtime file storage example:
 ```env
 ORCA_WORKER_URL=http://orca-worker:8090
 ORCA_WORKER_TIMEOUT=1800
-JOB_DB_PATH=/tmp/step-analysis-jobs/jobs.db
-JOB_FILES_DIR=/tmp/step-analysis-jobs/files
+ANALYSIS_MAX_WORKERS=5
+JOB_DB_PATH=/data/jobs.db
+JOB_FILES_DIR=/data/files
+JOB_RESULT_RETENTION_SECONDS=3600
+JOB_CLEANUP_INTERVAL_SECONDS=60
 ```
 
 ### Orca Worker
 
-Set these according to your worker implementation:
-
-```env
-KEEP_TMP=false
-```
+Per-run Orca temporary data is always deleted in a `finally` block on both success and failure.
 
 ---
 
@@ -397,7 +443,7 @@ matplotlib==3.9.0
 pydantic~=2.12.5
 ```
 
-If you encounter compatibility issues between CadQuery and Matplotlib in your container, pin Matplotlib more conservatively.
+The CAD preview renderer uses VTK off-screen rendering. `vtk>=9.2,<10` is declared explicitly even though CadQuery installations commonly bring VTK transitively.
 
 ---
 
@@ -451,8 +497,13 @@ services:
     environment:
       ORCA_WORKER_URL: http://orca-worker:8090
       ORCA_WORKER_TIMEOUT: 1800
-      JOB_DB_PATH: /tmp/step-analysis-jobs/jobs.db
-      JOB_FILES_DIR: /tmp/step-analysis-jobs/files
+      ANALYSIS_MAX_WORKERS: 5
+      JOB_DB_PATH: /data/jobs.db
+      JOB_FILES_DIR: /data/files
+      JOB_RESULT_RETENTION_SECONDS: 3600
+      JOB_CLEANUP_INTERVAL_SECONDS: 60
+    volumes:
+      - step-analysis-job-state:/data
     depends_on:
       - orca-worker
 
@@ -460,8 +511,9 @@ services:
     image: your-orca-worker-image
     ports:
       - "8090:8090"
-    environment:
-      KEEP_TMP: "false"
+
+volumes:
+  step-analysis-job-state:
 ```
 
 ---

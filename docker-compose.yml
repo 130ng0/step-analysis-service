@@ -11,10 +11,16 @@ services:
       STEP_SERVICE_API_KEY: "${STEP_SERVICE_API_KEY}"
       MAX_FILE_SIZE_MB: "${MAX_FILE_SIZE_MB}"
       ANALYSIS_MAX_WORKERS: "${ANALYSIS_MAX_WORKERS:-5}"
+      JOB_DB_PATH: "/data/jobs.db"
+      JOB_FILES_DIR: "/data/files"
+      JOB_RESULT_RETENTION_SECONDS: "${JOB_RESULT_RETENTION_SECONDS:-3600}"
+      JOB_CLEANUP_INTERVAL_SECONDS: "${JOB_CLEANUP_INTERVAL_SECONDS:-60}"
       ORCA_WORKER_URL: "http://orca-worker:8090"
       ORCA_WORKER_TIMEOUT: "1800"
     depends_on:
       - orca-worker
+    volumes:
+      - step-analysis-job-state:/data
 
   orca-worker:
     build:
@@ -22,5 +28,5 @@ services:
       dockerfile: orca-worker/Dockerfile
     container_name: orca-worker
     restart: unless-stopped
-    environment:
-      KEEP_TMP: "${KEEP_TMP_ORCA}"
+volumes:
+  step-analysis-job-state:
