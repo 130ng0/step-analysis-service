@@ -34,12 +34,12 @@ def render_stl_to_png(stl_path: str, output_path: str) -> None:
     surface = vtk.vtkActor()
     surface.SetMapper(surface_mapper)
     prop = surface.GetProperty()
-    prop.SetColor(0.17, 0.18, 0.20)
+    prop.SetColor(0.48, 0.50, 0.53)
     prop.SetOpacity(1.0)
     prop.SetInterpolationToPhong()
-    prop.SetAmbient(0.30)
-    prop.SetDiffuse(0.78)
-    prop.SetSpecular(0.10)
+    prop.SetAmbient(0.38)
+    prop.SetDiffuse(0.72)
+    prop.SetSpecular(0.12)
     prop.SetSpecularPower(18.0)
 
     renderer = vtk.vtkRenderer()
@@ -119,14 +119,14 @@ def render_stl_to_png(stl_path: str, output_path: str) -> None:
     key.SetLightTypeToSceneLight()
     key.SetPosition(-1.0, -1.2, 2.0)
     key.SetFocalPoint(0.0, 0.0, 0.0)
-    key.SetIntensity(0.95)
+    key.SetIntensity(0.88)
     renderer.AddLight(key)
 
     fill = vtk.vtkLight()
     fill.SetLightTypeToSceneLight()
     fill.SetPosition(1.2, 0.8, 1.0)
     fill.SetFocalPoint(0.0, 0.0, 0.0)
-    fill.SetIntensity(0.38)
+    fill.SetIntensity(0.52)
     renderer.AddLight(fill)
 
     try:

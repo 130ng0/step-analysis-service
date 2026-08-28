@@ -1,5 +1,11 @@
 # 3D Model Analysis Service
 
+## 2.13.0 - Screen + thermal-label preview contrast
+
+* Preview surfaces use a lighter neutral CAD gray so shading remains attractive on screen while black feature/silhouette edges retain strong contrast on thermal labels.
+* Darkest surface tones are kept clearly separated from the black edge pass; background remains white.
+* Portrait storage/cropping behavior from 2.12.0 is unchanged.
+
 ## 2.12.0 - Portrait preview storage
 
 - Final preview PNGs are whitespace-cropped first.
