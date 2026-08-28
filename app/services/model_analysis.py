@@ -50,6 +50,14 @@ def _crop_png_whitespace(png_bytes: bytes, padding: int = 20) -> bytes:
         right = min(right + padding, image.width)
         lower = min(lower + padding, image.height)
         cropped = image.crop((left, upper, right, lower))
+
+        # Keep saved previews portrait-oriented for downstream uses such as
+        # component labels.  Rotate only after whitespace cropping, and use a
+        # lossless 90-degree transpose: no scaling, resampling or quality loss.
+        # Portrait/square previews keep their original orientation.
+        if cropped.width > cropped.height:
+            cropped = cropped.transpose(Image.Transpose.ROTATE_270)
+
         out = io.BytesIO()
         cropped.save(out, format="PNG", optimize=True)
         return out.getvalue()

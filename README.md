@@ -1,5 +1,14 @@
 # 3D Model Analysis Service
 
+## 2.12.0 - Portrait preview storage
+
+- Final preview PNGs are whitespace-cropped first.
+- If the cropped preview is wider than high, it is rotated 90 degrees clockwise before storage.
+- Rotation is lossless (Pillow transpose): no scaling or resampling; width/height are only swapped.
+- Portrait and square previews remain unchanged.
+- Internal VTK render resolution remains 700 x 560 px before cropping.
+
+
 ## Overview
 
 The 3D Model Analysis Service accepts uploaded STEP or STL files, converts them when necessary, slices them using an Orca worker, calculates material and machine costs, generates a preview image, and exposes the result through an asynchronous job API.

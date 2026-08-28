@@ -42,7 +42,7 @@ logger = logging.getLogger("step-analysis-service")
 
 app = FastAPI(
     title="3D Model Analysis Service",
-    version="2.11.0",
+    version="2.12.0",
     docs_url="/docs",
     redoc_url="/redoc",
 )
