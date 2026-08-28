@@ -1,5 +1,10 @@
 # 3D Model Analysis Service
 
+## 2.14.0 - Brighter balanced preview
+
+* Preview surfaces are one step lighter than 2.13.0 for clearer geometry on thermal labels while preserving the CAD shading on screen.
+* Black feature and silhouette edges, white background, render resolution, cropping, and portrait storage are unchanged.
+
 ## 2.13.0 - Screen + thermal-label preview contrast
 
 * Preview surfaces use a lighter neutral CAD gray so shading remains attractive on screen while black feature/silhouette edges retain strong contrast on thermal labels.
