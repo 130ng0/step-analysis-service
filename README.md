@@ -22,6 +22,15 @@ The service is designed for integration with Odoo and similar systems that need 
 
 ---
 
+## V3.5 isolated headless preview renderer
+
+* VTK/OpenGL preview rendering now runs in a dedicated child process instead of inside the FastAPI process.
+* Production Docker runs that child under `xvfb-run`, providing a deterministic headless X/OpenGL context.
+* A native VTK/OpenGL abort or segfault can no longer terminate the API service on port 5050.
+* Preview rendering remains serialized while STEP conversion and Orca slicing can use the configured parallel worker pool.
+* `PREVIEW_RENDER_TIMEOUT_SECONDS` (default `120`) bounds hung renderer processes.
+* The Docker image now installs Xvfb, xauth and Mesa DRI explicitly.
+
 ## V3.4 topology-correct CAD edge rendering
 
 * STEP-to-STL mesh vertices are welded with `vtkCleanPolyData` before CAD edge extraction. This prevents duplicated STL triangle vertices from being mistaken for boundaries and preserves real geometric transitions.
@@ -56,6 +65,7 @@ Environment variables:
 ANALYSIS_MAX_WORKERS=5             # allowed 1..10
 JOB_RESULT_RETENTION_SECONDS=3600  # terminal DB safety retention
 JOB_CLEANUP_INTERVAL_SECONDS=60
+PREVIEW_RENDER_TIMEOUT_SECONDS=120
 ```
 
 ## Production Architecture
@@ -399,6 +409,7 @@ JOB_DB_PATH=/data/jobs.db
 JOB_FILES_DIR=/data/files
 JOB_RESULT_RETENTION_SECONDS=3600
 JOB_CLEANUP_INTERVAL_SECONDS=60
+PREVIEW_RENDER_TIMEOUT_SECONDS=120
 ```
 
 ### Orca Worker

@@ -42,7 +42,7 @@ logger = logging.getLogger("step-analysis-service")
 
 app = FastAPI(
     title="3D Model Analysis Service",
-    version="2.10.0",
+    version="2.11.0",
     docs_url="/docs",
     redoc_url="/redoc",
 )
@@ -146,6 +146,7 @@ def health():
         "analysis_workers_configured": ANALYSIS_MAX_WORKERS,
         "analysis_workers_alive": alive_workers,
         "job_result_retention_seconds": JOB_RESULT_RETENTION_SECONDS,
+        "preview_renderer": "isolated-xvfb-subprocess",
     }
 
 
