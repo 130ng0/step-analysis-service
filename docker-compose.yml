@@ -24,6 +24,7 @@ services:
       - step-analysis-job-state:/data
 
   orca-worker:
+    image: nevo-orca-worker:2.5.1
     build:
       context: .
       dockerfile: orca-worker/Dockerfile

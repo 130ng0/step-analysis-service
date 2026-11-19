@@ -20,6 +20,9 @@ app = FastAPI(title="Orca Worker API", version="2.3.0")
 
 ORCA_PATH = "/opt/orca/squashfs-root/AppRun"
 FILAMENT_DIAMETER_MM_DEFAULT = 1.75
+GCODE_EXTRUSION_COMMAND = re.compile(r"^(G0?[0-3]|G92|M8[23])(?=\s|[A-Z]|$)", re.IGNORECASE)
+GCODE_WORD = re.compile(r"([A-Z])([+-]?(?:\d+\.?\d*|\.\d+))")
+SUPPORT_ROLES = {"Support", "Support interface"}
 
 
 class OrcaSliceError(Exception):
@@ -355,6 +358,8 @@ def parse_gcode(
     support_filament_metadata = support_filament_metadata or filament_metadata
 
     current_role = "unknown"
+    relative_extrusion = True
+    extrusion_position = 0.0
 
     total_filament_mm = None
     total_filament_cm3 = None
@@ -367,7 +372,8 @@ def parse_gcode(
     gcode_filament_cost_per_kg = None
     gcode_filament_type = None
 
-    extrusion_by_role_mm: Dict[str, float] = {}
+    deposited_mm = 0.0
+    support_mm = 0.0
 
     with open(gcode_path, "r", encoding="utf-8", errors="ignore") as f:
         for line in f:
@@ -431,19 +437,40 @@ def parse_gcode(
             elif s.startswith(";TYPE:"):
                 current_role = s.split(":", 1)[1].strip()
 
-            elif s.startswith("G1") and " E" in s:
-                m = re.search(r"(?:^|\s)E(-?\d+(?:\.\d+)?)", s)
-                if m:
-                    try:
-                        delta_e = float(m.group(1))
-                    except Exception:
-                        delta_e = 0.0
+            else:
+                command_match = GCODE_EXTRUSION_COMMAND.match(s)
+                if command_match is None:
+                    continue
+                command = command_match[1].upper()
+                if command in ("M82", "M83"):
+                    relative_extrusion = command == "M83"
+                    continue
 
-                    if delta_e > 0:
-                        extrusion_by_role_mm[current_role] = extrusion_by_role_mm.get(current_role, 0.0) + delta_e
+                arguments = s[command_match.end():].partition(";")[0].upper()
+                if "E" not in arguments:
+                    continue
+                words = dict(GCODE_WORD.findall(arguments))
+                if "E" not in words:
+                    continue
+                e_value = float(words["E"])
+                if command == "G92":
+                    extrusion_position = e_value
+                    continue
+
+                delta_e = e_value if relative_extrusion else e_value - extrusion_position
+                extrusion_position += delta_e
+                # Extruder-only moves include retract, unretract and priming. A full
+                # circle can deposit material without changing the XY endpoint.
+                has_path = "X" in words or "Y" in words
+                if command in ("G2", "G02", "G3", "G03"):
+                    has_path = has_path or "I" in words or "J" in words
+                if delta_e > 0 and has_path:
+                    deposited_mm += delta_e
+                    if current_role in SUPPORT_ROLES:
+                        support_mm += delta_e
 
     if total_filament_mm is None:
-        total_filament_mm = sum(extrusion_by_role_mm.values())
+        total_filament_mm = deposited_mm
 
     model_density_g_cm3 = filament_metadata.get("filament_density_g_cm3") or gcode_filament_density
     model_diameter_mm = filament_metadata.get("filament_diameter_mm") or gcode_filament_diameter or FILAMENT_DIAMETER_MM_DEFAULT
@@ -468,11 +495,10 @@ def parse_gcode(
         length_cm = total_filament_mm / 10.0
         total_filament_cm3 = math.pi * (radius_cm ** 2) * length_cm
 
-    support_mm = (
-        extrusion_by_role_mm.get("Support", 0.0)
-        + extrusion_by_role_mm.get("Support interface", 0.0)
-    )
-    model_mm = (total_filament_mm or 0.0) - support_mm
+    # The slicer's aggregate is rounded and can be slightly smaller than the
+    # sum of individual extrusion moves.
+    support_mm = min(support_mm, total_filament_mm)
+    model_mm = total_filament_mm - support_mm
 
     support_cm3 = 0.0
     model_cm3 = 0.0

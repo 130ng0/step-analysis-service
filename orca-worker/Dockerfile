@@ -39,9 +39,9 @@ RUN pip3 install --break-system-packages \
 WORKDIR /opt/orca
 
 RUN wget -O OrcaSlicer.AppImage \
-    https://github.com/OrcaSlicer/OrcaSlicer/releases/download/v2.3.2/OrcaSlicer_Linux_AppImage_Ubuntu2404_V2.3.2.AppImage
+    https://github.com/OrcaSlicer/OrcaSlicer/releases/download/v2.5.1/OrcaSlicer_Linux_AppImage_Ubuntu2404_V2.5.1.AppImage
 
-RUN chmod +x OrcaSlicer.AppImage
+RUN echo "073b8105c928356141db0ddbce88b81d52c7a9e2442f9baae0a9089c89ff04eb  OrcaSlicer.AppImage" | sha256sum -c - && chmod +x OrcaSlicer.AppImage
 RUN ./OrcaSlicer.AppImage --appimage-extract
 
 WORKDIR /workspace

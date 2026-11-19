@@ -480,6 +480,21 @@ The CAD preview renderer uses VTK off-screen rendering. `vtk>=9.2,<10` is declar
 
 ## Docker Notes
 
+### Orca worker deployment
+
+Compose builds `nevo-orca-worker:2.5.1` for Linux x86-64. The worker Dockerfile downloads and verifies the official Ubuntu 24.04 AppImage. On a server with the updated checkout and the existing stack environment, rebuild and replace the worker with:
+
+```sh
+docker compose up -d --build --no-deps orca-worker
+curl -fsS http://localhost:5050/health
+```
+
+Use the existing Compose project name and stack environment when updating a Portainer-managed stack from the command line. The health response should report `"orca_worker": "ok"`.
+
+For deployment from the prebuilt local export, transfer `orca-worker-2.5.1-linux-amd64.tar` to the Docker host, run `docker load -i orca-worker-2.5.1-linux-amd64.tar`, then use `docker compose up -d --no-build --no-deps orca-worker` with the updated Compose file. The image archive is excluded from regular Git commits. It can be uploaded as a GitHub Release asset if needed.
+
+The previous build recipe is in [`archive/orca-2.3.2/Dockerfile`](archive/orca-2.3.2/Dockerfile). To roll back, change the Compose image tag to `nevo-orca-worker:2.3.2` and load the archived image if available. To rebuild instead, restore the archived Dockerfile to `orca-worker/Dockerfile` before rebuilding the worker.
+
 ### System Dependencies
 
 For preview rendering and CAD stack support, containers often need additional OS packages.
