@@ -1,5 +1,14 @@
 # 3D Model Analysis Service
 
+## Orca worker 2.5.1
+
+* The worker uses the official OrcaSlicer 2.5.1 AppImage for Ubuntu 24.04 on Linux x86-64. The Docker build verifies its SHA-256 checksum.
+* The G-code parser accounts for linear and arc extrusion, decimal values such as `E.59691`, relative and absolute extrusion, and `G92` resets. Model and support material are calculated separately for pricing.
+* The worker slices in the uploaded model's orientation. The [orientation test](#orientation-test) used the explicit `--orient 1` option.
+* Local Docker verification passed for the `/slice` endpoint with ABS and PC-FR and for the [G-code parser regression tests](orca-worker/test_gcode_parser.py).
+
+See [Orca worker deployment](#orca-worker-deployment) for the Portainer update and rollback steps.
+
 ## 2.14.0 - Brighter balanced preview
 
 * Preview surfaces are one step lighter than 2.13.0 for clearer geometry on thermal labels while preserving the CAD shading on screen.
@@ -489,11 +498,25 @@ docker compose up -d --build --no-deps orca-worker
 curl -fsS http://localhost:5050/health
 ```
 
-For a Portainer Git stack on a Docker host that supports Compose builds, use **Pull and redeploy** with **Re-pull image** disabled. Compose rebuilds the worker from its Dockerfile even if the previous stack image is cached. Use the existing Compose project name and stack environment when updating a Portainer-managed stack from the command line. The health response should report `"orca_worker": "ok"`.
+### Portainer Git stack
+
+1. Push the updated worker and Compose files to the branch configured for the stack.
+2. In Portainer, select **Pull and redeploy** to fetch the Git revision. **Re-pull image** is optional for this rollout. With `pull_policy: build`, Compose builds the worker from its Dockerfile even if the previous image is cached.
+3. Request `http://<docker-host>:5050/health` and check for `"orca_worker": "ok"` to verify that the API can reach the worker.
+
+If Portainer reports `pull access denied for nevo-orca-worker`, check the configured Git branch and Compose path. The current [Compose file](docker-compose.yml) uses a `build:` block and `pull_policy: build` for the worker. A stack definition with `image: nevo-orca-worker:2.5.1` can make Portainer try Docker Hub for that tag.
+
+Use the existing Compose project name and stack environment when updating a Portainer-managed stack from the command line.
+
+### Prebuilt image and rollback
 
 For deployment from the prebuilt local export, transfer `orca-worker-2.5.1-linux-amd64.tar` to the Docker host and run `docker load -i orca-worker-2.5.1-linux-amd64.tar`. Tag `nevo-orca-worker:2.5.1` with the worker image name reported by `docker compose config --images` for the existing project, then run `docker compose up -d --no-build --pull never --no-deps orca-worker`. The image archive is excluded from regular Git commits. It can be uploaded as a GitHub Release asset if needed.
 
 To roll back by rebuilding, restore [`archive/orca-2.3.2/Dockerfile`](archive/orca-2.3.2/Dockerfile) to `orca-worker/Dockerfile` before rebuilding the worker. To deploy the archived image, load it, tag `nevo-orca-worker:2.3.2` with the existing project's worker image name, and use the prebuilt deployment command above.
+
+### Orientation test
+
+In a local comparison on the SC6-1X90 adapter with PC-FR, a 0.4 mm nozzle, 20% infill, and breakaway supports, OrcaSlicer 2.5.1 estimated 173.48 g of supports and 21 h 32 min in the original orientation. Explicit `--orient 1` selected the same orientation as a manual 180° rotation about X and reduced the estimates to 24.97 g and 14 h 38 min. OrcaSlicer 2.3.2 also selected that orientation when explicitly enabled. The estimates apply to this model and profile.
 
 ### System Dependencies
 
@@ -508,59 +531,9 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 ```
 
-### Example API Dockerfile
+### Docker Compose ports
 
-```dockerfile
-FROM python:3.12-slim
-
-WORKDIR /app
-
-RUN apt-get update && apt-get install -y \
-    libgl1 \
-    libglib2.0-0 \
-    && rm -rf /var/lib/apt/lists/*
-
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-
-COPY app ./app
-
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "5050"]
-```
-
----
-
-## Example Docker Compose
-
-```yaml
-version: "3.9"
-
-services:
-  step-analysis-service:
-    build: .
-    ports:
-      - "5050:5050"
-    environment:
-      ORCA_WORKER_URL: http://orca-worker:8090
-      ORCA_WORKER_TIMEOUT: 1800
-      ANALYSIS_MAX_WORKERS: 5
-      JOB_DB_PATH: /data/jobs.db
-      JOB_FILES_DIR: /data/files
-      JOB_RESULT_RETENTION_SECONDS: 3600
-      JOB_CLEANUP_INTERVAL_SECONDS: 60
-    volumes:
-      - step-analysis-job-state:/data
-    depends_on:
-      - orca-worker
-
-  orca-worker:
-    image: your-orca-worker-image
-    ports:
-      - "8090:8090"
-
-volumes:
-  step-analysis-job-state:
-```
+The [API Dockerfile](Dockerfile) listens on container port `8080`. The [Compose stack](docker-compose.yml) publishes it on host port `5050`. The API reaches the worker over the internal Compose network at `http://orca-worker:8090`.
 
 ---
 
