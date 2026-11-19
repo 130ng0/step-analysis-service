@@ -1,0 +1,58 @@
+FROM ubuntu:24.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y \
+    wget \
+    curl \
+    ca-certificates \
+    file \
+    xz-utils \
+    python3 \
+    python3-pip \
+    libfuse2 \
+    libgl1 \
+    libegl1 \
+    libopengl0 \
+    libglu1-mesa \
+    libglib2.0-0 \
+    libxrender1 \
+    libxext6 \
+    libsm6 \
+    libx11-6 \
+    libpangoft2-1.0-0 \
+    libpangocairo-1.0-0 \
+    libatk1.0-0 \
+    libgtk-3-0 \
+    libgstreamer1.0-0 \
+    libgstreamer-plugins-base1.0-0 \
+    libsoup-3.0-0 \
+    libjavascriptcoregtk-4.1-0 \
+    libwebkit2gtk-4.1-0 \
+    libmspack0 \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN pip3 install --break-system-packages \
+    fastapi uvicorn python-multipart \
+    trimesh numpy networkx lxml
+
+WORKDIR /opt/orca
+
+RUN wget -O OrcaSlicer.AppImage \
+    https://github.com/OrcaSlicer/OrcaSlicer/releases/download/v2.3.2/OrcaSlicer_Linux_AppImage_Ubuntu2404_V2.3.2.AppImage
+
+RUN chmod +x OrcaSlicer.AppImage
+RUN ./OrcaSlicer.AppImage --appimage-extract
+
+WORKDIR /workspace
+
+COPY orca-worker/api.py /workspace/api.py
+COPY orca-worker/profile_loader.py /workspace/profile_loader.py
+COPY orca-worker/entrypoint.sh /entrypoint.sh
+COPY orca-worker/orca-profiles /seed/profiles
+COPY orca-worker/stl-test /seed/stl-test
+COPY orca-worker/resolve_profiles.py /workspace/resolve_profiles.py
+
+RUN chmod +x /entrypoint.sh
+
+ENTRYPOINT ["/entrypoint.sh"]
