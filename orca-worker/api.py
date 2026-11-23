@@ -13,10 +13,11 @@ from typing import Dict, List, Literal
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
 
+from orientation import prepare_orientation
 from profile_loader import ProfileLoaderError, select_profile_set
 from resolve_profiles import ResolveProfilesError, resolve_profile_set
 
-app = FastAPI(title="Orca Worker API", version="2.3.0")
+app = FastAPI(title="Orca Worker API", version="2.3.2")
 
 ORCA_PATH = "/opt/orca/squashfs-root/AppRun"
 FILAMENT_DIAMETER_MM_DEFAULT = 1.75
@@ -31,7 +32,7 @@ class OrcaSliceError(Exception):
 
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    return {"status": "ok", "orca_slicer_version": os.getenv("ORCA_SLICER_VERSION")}
 
 
 @app.post("/slice")
@@ -97,6 +98,7 @@ async def slice_model(
                 "perimeter_count": perimeter_count,
                 "top_layers": top_layers,
                 "bottom_layers": bottom_layers,
+                "orientation": result.pop("orientation"),
             },
             **result,
         }
@@ -275,10 +277,10 @@ def run_orca_with_profiles(
         if material_display_name:
             filament_metadata["filament_type"] = material_display_name
 
-        support_filament_metadata = None
-
-        if support_filament_metadata is None:
-            support_filament_metadata = dict(filament_metadata)
+        support_price_filament = selected.get("support_price_filament")
+        support_filament_metadata = (
+            load_named_filament_metadata(support_price_filament) if support_price_filament else dict(filament_metadata)
+        )
 
         if support_density_g_cm3 and support_density_g_cm3 > 0:
             support_filament_metadata["filament_density_g_cm3"] = support_density_g_cm3
@@ -289,10 +291,9 @@ def run_orca_with_profiles(
         if support_material_display_name:
             support_filament_metadata["filament_type"] = support_material_display_name
 
-        support_price_filament = selected.get("support_price_filament")
-
-        if support_price_filament:
-            support_filament_metadata = load_named_filament_metadata(str(support_price_filament))
+        slice_input, orientation = Path(stl_path), "original"
+        if support_material_type != "none":
+            slice_input, orientation = prepare_orientation(slice_input, tmpdir_path / "flipped.stl")
 
         cmd = [
             ORCA_PATH,
@@ -300,7 +301,7 @@ def run_orca_with_profiles(
             "--load-filaments", str(filament_path),
             "--outputdir", str(output_dir),
             "--slice", "0",
-            stl_path,
+            str(slice_input),
         ]
 
         proc = subprocess.run(
@@ -326,6 +327,7 @@ def run_orca_with_profiles(
             support_filament_metadata=support_filament_metadata,
         )
 
+        result["orientation"] = orientation
         return result
 
     finally:

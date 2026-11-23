@@ -27,6 +27,9 @@ services:
     build:
       context: .
       dockerfile: orca-worker/Dockerfile
+      args:
+        ORCA_SLICER_VERSION: "${ORCA_SLICER_VERSION:-2.5.2}"
+        ORCA_SLICER_SHA256: "${ORCA_SLICER_SHA256:-}"
     pull_policy: build
     container_name: orca-worker
     restart: unless-stopped

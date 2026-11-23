@@ -1,13 +1,30 @@
 # 3D Model Analysis Service
 
-## Orca worker 2.5.1
+## Orca worker 2.5.2
 
-* The worker uses the official OrcaSlicer 2.5.1 AppImage for Ubuntu 24.04 on Linux x86-64. The Docker build verifies its SHA-256 checksum.
+* The worker uses the official OrcaSlicer 2.5.2 AppImage for Ubuntu 24.04 on Linux x86-64. The Docker build verifies its SHA-256 checksum.
 * The G-code parser accounts for linear and arc extrusion, decimal values such as `E.59691`, relative and absolute extrusion, and `G92` resets. Model and support material are calculated separately for pricing.
-* The worker slices in the uploaded model's orientation. The [orientation test](#orientation-test) used the explicit `--orient 1` option.
+* The [initial orientation test](#orientation-test) used the explicit `--orient 1` option. The current worker uses the fast orientation estimate described below.
 * Local Docker verification passed for the `/slice` endpoint with ABS and PC-FR and for the [G-code parser regression tests](orca-worker/test_gcode_parser.py).
 
 See [Orca worker deployment](#orca-worker-deployment) for the Portainer update and rollback steps.
+
+## 2.14.2 / Orca Worker API 2.3.2 - Fast orientation estimate
+
+With supports enabled, the worker reads binary STL bounds and samples up to 32,768 triangles. It estimates the support needed in the input orientation and after a 180-degree rotation around X. It flips only when the estimated support score drops by more than 30 percent and the rotated model has a measurable bed contact area. ASCII STL and geometry without a clear preference use the input orientation.
+
+The worker runs Orca once. The chosen orientation is recorded in `applied_slicer_settings.orientation` as `original` or `flipped_x_180`. This setting describes the slice used for pricing. The preview shows the uploaded orientation. Printable contact area and support requirements are still estimates until Orca runs. Rebuild both the `orca-worker` and `step-analysis-service` images to enable orientation selection and to retain the chosen orientation in queued job results.
+
+## Orca Worker API 2.3.1 - Soluble support estimates
+
+* Soluble support uses zero top and bottom Z gaps. Breakaway uses the process profile's Z gaps.
+* For support volume measured from the G-code, the worker uses the supplied support price and density before falling back to profile values. Both support body and interface are charged as the selected support material.
+* The estimate slices with one extruder. Tool-change and purge time and waste are outside the estimate.
+* Rebuild the `orca-worker` image before updating the Odoo website module to 17.0.1.8.26. The job API container uses the existing request contract.
+
+## 2.14.1 - Queue time estimates
+
+Queued jobs include an approximate remaining time in `eta_seconds`. The estimate combines the current phases of running jobs, the number of live workers and a 90-second allowance for each waiting or not-yet-estimated job. Queue positions and job claiming use the same FIFO ordering, with insertion order breaking timestamp ties. The Orca worker image is independent of this API update.
 
 ## 2.14.0 - Brighter balanced preview
 
@@ -491,10 +508,10 @@ The CAD preview renderer uses VTK off-screen rendering. `vtk>=9.2,<10` is declar
 
 ### Orca worker deployment
 
-Compose builds the Orca worker for Linux x86-64 from `orca-worker/Dockerfile`. The Dockerfile downloads and verifies the official OrcaSlicer 2.5.1 AppImage for Ubuntu 24.04. On a server with the updated checkout and the existing stack environment, rebuild and replace the worker with:
+Compose builds the Orca worker for Linux x86-64 from `orca-worker/Dockerfile`. The Dockerfile downloads and verifies the official OrcaSlicer 2.5.2 AppImage for Ubuntu 24.04. For the first deployment of version reporting, rebuild both services from the updated checkout with the existing stack environment:
 
 ```sh
-docker compose up -d --build --no-deps orca-worker
+docker compose up -d --build step-analysis-service orca-worker
 curl -fsS http://localhost:5050/health
 ```
 
@@ -502,17 +519,24 @@ curl -fsS http://localhost:5050/health
 
 1. Push the updated worker and Compose files to the branch configured for the stack.
 2. In Portainer, select **Pull and redeploy** to fetch the Git revision. **Re-pull image** is optional for this rollout. With `pull_policy: build`, Compose builds the worker from its Dockerfile even if the previous image is cached.
-3. Request `http://<docker-host>:5050/health` and check for `"orca_worker": "ok"` to verify that the API can reach the worker.
+3. Request `http://<docker-host>:5050/health` and check for `"orca_worker": "ok"` and `"orca_slicer_version": "2.5.2"` to verify the update.
 
-If Portainer reports `pull access denied for nevo-orca-worker`, check the configured Git branch and Compose path. The current [Compose file](docker-compose.yml) uses a `build:` block and `pull_policy: build` for the worker. A stack definition with `image: nevo-orca-worker:2.5.1` can make Portainer try Docker Hub for that tag.
+For subsequent updates, edit the stack environment variables in Portainer and redeploy with a build:
+
+- `ORCA_SLICER_VERSION` selects the stable release, for example `2.5.2` or `2.5.1`. The default is `2.5.2`.
+- `ORCA_SLICER_SHA256` supplies the official SHA-256 digest for that release's Ubuntu 24.04 x86-64 AppImage. For `2.5.2` and `2.5.1`, leave it empty to use the pinned checksum. For other versions, enter the 64 hexadecimal characters without the `sha256:` prefix.
+
+The build verifies the AppImage before extracting it. Select `2.5.1` and clear the checksum override to rebuild with the previous slicer. For a quick rollback, use the retained prebuilt image. Complete running analyses before replacing the worker.
+
+If Portainer reports `pull access denied for nevo-orca-worker`, check the configured Git branch and Compose path. The current [Compose file](docker-compose.yml) uses a `build:` block and `pull_policy: build` for the worker. A stack definition with `image: nevo-orca-worker:2.5.2` can make Portainer try Docker Hub for that tag.
 
 Use the existing Compose project name and stack environment when updating a Portainer-managed stack from the command line.
 
 ### Prebuilt image and rollback
 
-For deployment from the prebuilt local export, transfer `orca-worker-2.5.1-linux-amd64.tar` to the Docker host and run `docker load -i orca-worker-2.5.1-linux-amd64.tar`. Tag `nevo-orca-worker:2.5.1` with the worker image name reported by `docker compose config --images` for the existing project, then run `docker compose up -d --no-build --pull never --no-deps orca-worker`. The image archive is excluded from regular Git commits. It can be uploaded as a GitHub Release asset if needed.
+For deployment from the prebuilt local export, transfer `orca-worker-2.5.2-linux-amd64.tar` to the Docker host and run `docker load -i orca-worker-2.5.2-linux-amd64.tar`. Tag `nevo-orca-worker:2.5.2` with the worker image name reported by `docker compose config --images` for the existing project, then run `docker compose up -d --no-build --pull never --no-deps orca-worker`. The image archive is excluded from regular Git commits. It can be uploaded as a GitHub Release asset if needed.
 
-To roll back by rebuilding, restore [`archive/orca-2.3.2/Dockerfile`](archive/orca-2.3.2/Dockerfile) to `orca-worker/Dockerfile` before rebuilding the worker. To deploy the archived image, load it, tag `nevo-orca-worker:2.3.2` with the existing project's worker image name, and use the prebuilt deployment command above.
+To return to 2.5.1, load the retained `orca-worker-2.5.1-linux-amd64.tar` and follow the prebuilt deployment procedure with `nevo-orca-worker:2.5.1`. To return to 2.3.2 by rebuilding, restore [`archive/orca-2.3.2/Dockerfile`](archive/orca-2.3.2/Dockerfile) to `orca-worker/Dockerfile` before rebuilding the worker. To deploy the archived image, load it, tag `nevo-orca-worker:2.3.2` with the existing project's worker image name, and use the prebuilt deployment command above.
 
 ### Orientation test
 

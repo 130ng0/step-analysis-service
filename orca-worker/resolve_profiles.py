@@ -169,7 +169,11 @@ def patch_process_for_support_mode(process: dict[str, Any], support_material_typ
     else:
         patched["enable_support"] = "1"
 
-    # Single-extruder slicing; support uses same slicer extruder.
+    if support == "soluble":
+        patched["support_top_z_distance"] = "0"
+        patched["support_bottom_z_distance"] = "0"
+
+    # Single-extruder estimate; support is priced separately from the G-code roles.
     patched["support_filament"] = "0"
     patched["support_interface_filament"] = "0"
 

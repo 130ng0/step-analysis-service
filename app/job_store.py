@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import heapq
 import json
 import os
 import sqlite3
@@ -148,7 +149,7 @@ def claim_next_job() -> dict[str, Any] | None:
                 """
                 SELECT * FROM jobs
                 WHERE status = 'queued'
-                ORDER BY created_at ASC
+                ORDER BY created_at ASC, rowid ASC
                 LIMIT 1
                 """
             ).fetchone()
@@ -374,14 +375,41 @@ def get_queue_position(job_id: str) -> int | None:
                 SELECT COUNT(*) + 1 AS pos
                 FROM jobs
                 WHERE status = 'queued'
-                  AND created_at < ?
+                  AND (
+                    created_at < ?
+                    OR (created_at = ? AND rowid < (SELECT rowid FROM jobs WHERE job_id = ?))
+                  )
                 """,
-                (created_at,),
+                (created_at, created_at, job_id),
             ).fetchone()
         finally:
             conn.close()
 
     return int(row["pos"]) if row else None
+
+
+def estimate_queued_eta_seconds(position: int | None, worker_count: int) -> int | None:
+    if position is None or worker_count < 1:
+        return None
+
+    # This matches the conversion-phase estimate when no phase ETA is known.
+    typical_duration = 90
+    with _db_lock:
+        conn = _connect()
+        try:
+            active = conn.execute(
+                "SELECT eta_seconds FROM jobs WHERE status = 'processing' ORDER BY started_at LIMIT ?",
+                (worker_count,),
+            ).fetchall()
+        finally:
+            conn.close()
+
+    available = [typical_duration if row["eta_seconds"] is None else max(1, row["eta_seconds"]) for row in active]
+    available.extend([0] * (worker_count - len(available)))
+    heapq.heapify(available)
+    for _ in range(position - 1):
+        heapq.heapreplace(available, available[0] + typical_duration)
+    return available[0] + typical_duration
 
 
 def get_job_dir(job_id: str) -> Path:

@@ -96,7 +96,7 @@ def process_job_sync(job: dict) -> None:
             "support_filament_weight_g": round(float(worker_payload.get("support_filament_weight_g", 0) or 0), 3),
             "model_material_cost_eur": round(float(worker_payload.get("model_material_cost_eur", 0) or 0), 2),
             "support_material_cost_eur": round(float(worker_payload.get("support_material_cost_eur", 0) or 0), 2),
-            "applied_slicer_settings": {
+            "applied_slicer_settings": worker_payload.get("applied_slicer_settings") or {
                 "infill_percent": request_payload.get("infill_percent"),
                 "perimeter_count": request_payload.get("perimeter_count"),
                 "top_layers": request_payload.get("top_layers"),

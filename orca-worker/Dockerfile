@@ -38,11 +38,28 @@ RUN pip3 install --break-system-packages \
 
 WORKDIR /opt/orca
 
-RUN wget -O OrcaSlicer.AppImage \
-    https://github.com/OrcaSlicer/OrcaSlicer/releases/download/v2.5.1/OrcaSlicer_Linux_AppImage_Ubuntu2404_V2.5.1.AppImage
+ARG ORCA_SLICER_VERSION=2.5.2
+ARG ORCA_SLICER_SHA256=""
 
-RUN echo "073b8105c928356141db0ddbce88b81d52c7a9e2442f9baae0a9089c89ff04eb  OrcaSlicer.AppImage" | sha256sum -c - && chmod +x OrcaSlicer.AppImage
-RUN ./OrcaSlicer.AppImage --appimage-extract
+RUN set -eu; \
+    printf '%s\n' "$ORCA_SLICER_VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; \
+    checksum="$ORCA_SLICER_SHA256"; \
+    if [ -z "$checksum" ]; then \
+        case "$ORCA_SLICER_VERSION" in \
+            2.5.2) checksum=22fa88884dec3fdbd29e90cba9912fcff6fb57a60b1bdc1a6c189c61a6b0a870 ;; \
+            2.5.1) checksum=073b8105c928356141db0ddbce88b81d52c7a9e2442f9baae0a9089c89ff04eb ;; \
+            *) echo "Set ORCA_SLICER_SHA256 to the official digest for OrcaSlicer $ORCA_SLICER_VERSION" >&2; exit 1 ;; \
+        esac; \
+    fi; \
+    printf '%s\n' "$checksum" | grep -Eq '^[[:xdigit:]]{64}$'; \
+    base_url="https://github.com/OrcaSlicer/OrcaSlicer/releases/download/v${ORCA_SLICER_VERSION}"; \
+    asset="OrcaSlicer_Linux_AppImage_Ubuntu2404_V${ORCA_SLICER_VERSION}.AppImage"; \
+    wget -O OrcaSlicer.AppImage "$base_url/$asset"; \
+    printf '%s  OrcaSlicer.AppImage\n' "$checksum" | sha256sum -c -; \
+    chmod +x OrcaSlicer.AppImage; \
+    ./OrcaSlicer.AppImage --appimage-extract > /dev/null
+
+ENV ORCA_SLICER_VERSION=${ORCA_SLICER_VERSION}
 
 WORKDIR /workspace
 
@@ -52,6 +69,7 @@ COPY orca-worker/entrypoint.sh /entrypoint.sh
 COPY orca-worker/orca-profiles /seed/profiles
 COPY orca-worker/stl-test /seed/stl-test
 COPY orca-worker/resolve_profiles.py /workspace/resolve_profiles.py
+COPY orca-worker/orientation.py /workspace/orientation.py
 
 RUN chmod +x /entrypoint.sh
 

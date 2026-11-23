@@ -27,6 +27,7 @@ from app.job_store import (
     cleanup_expired_terminal_jobs,
     create_job,
     delete_job,
+    estimate_queued_eta_seconds,
     get_job,
     get_job_dir,
     get_queue_position,
@@ -42,7 +43,7 @@ logger = logging.getLogger("step-analysis-service")
 
 app = FastAPI(
     title="3D Model Analysis Service",
-    version="2.14.0",
+    version="2.14.2",
     docs_url="/docs",
     redoc_url="/redoc",
 )
@@ -130,11 +131,18 @@ async def log_requests(request: Request, call_next):
 
 @app.get("/health")
 def health():
-    worker_status = "unknown"
+    worker_version = None
     try:
-        r = requests.get(f"{ORCA_WORKER_URL}/health", timeout=5)
-        worker_status = "ok" if r.ok else f"error:{r.status_code}"
-    except Exception:
+        response = requests.get(f"{ORCA_WORKER_URL}/health", timeout=5)
+        worker_status = "ok" if response.ok else f"error:{response.status_code}"
+        if response.ok:
+            try:
+                payload = response.json()
+            except ValueError:
+                payload = None
+            if isinstance(payload, dict):
+                worker_version = payload.get("orca_slicer_version")
+    except requests.RequestException:
         worker_status = "unreachable"
 
     tasks = list(getattr(app.state, "analysis_worker_tasks", []))
@@ -143,6 +151,7 @@ def health():
     return {
         "status": "ok",
         "orca_worker": worker_status,
+        "orca_slicer_version": worker_version,
         "analysis_workers_configured": ANALYSIS_MAX_WORKERS,
         "analysis_workers_alive": alive_workers,
         "job_result_retention_seconds": JOB_RESULT_RETENTION_SECONDS,
@@ -252,6 +261,8 @@ def get_analysis_job(job_id: str):
     status = job["status"]
 
     if status == "queued":
+        queue_position = get_queue_position(job_id)
+        live_workers = sum(not task.done() for task in getattr(app.state, "analysis_worker_tasks", ()))
         job_dir = get_job_dir(job_id)
         preview_png_base64 = None
         preview_path = job_dir / "preview_base64.txt"
@@ -264,8 +275,8 @@ def get_analysis_job(job_id: str):
             "status": "queued",
             "phase": job.get("phase") or "queued",
             "progress_percent": job.get("progress_percent") or 0,
-            "eta_seconds": job.get("eta_seconds"),
-            "queue_position": get_queue_position(job_id),
+            "eta_seconds": estimate_queued_eta_seconds(queue_position, live_workers),
+            "queue_position": queue_position,
             "preview_png_base64": preview_png_base64,
         }
 
