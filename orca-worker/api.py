@@ -8,7 +8,7 @@ import subprocess
 import tempfile
 import shutil
 from pathlib import Path
-from typing import Dict, List, Literal
+from typing import Dict, List, Literal, Optional
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
@@ -17,7 +17,7 @@ from orientation import prepare_orientation
 from profile_loader import ProfileLoaderError, select_profile_set
 from resolve_profiles import ResolveProfilesError, resolve_profile_set
 
-app = FastAPI(title="Orca Worker API", version="2.3.2")
+app = FastAPI(title="Orca Worker API", version="2.3.3")
 
 ORCA_PATH = "/opt/orca/squashfs-root/AppRun"
 FILAMENT_DIAMETER_MM_DEFAULT = 1.75
@@ -50,6 +50,7 @@ async def slice_model(
     support_price_eur_per_kg: float = Form(default=0.0),
     material_display_name: str = Form(default=""),
     support_material_display_name: str = Form(default=""),
+    nozzle_diameter_mm: Optional[Literal["0.4", "0.6"]] = Form(default=None),
 ):
     filename = file.filename or "model.stl"
     suffix = os.path.splitext(filename)[1].lower()
@@ -85,6 +86,7 @@ async def slice_model(
             support_price_eur_per_kg=support_price_eur_per_kg,
             material_display_name=material_display_name,
             support_material_display_name=support_material_display_name,
+            nozzle_diameter_mm=nozzle_diameter_mm,
         )
 
         return {
@@ -99,6 +101,8 @@ async def slice_model(
                 "top_layers": top_layers,
                 "bottom_layers": bottom_layers,
                 "orientation": result.pop("orientation"),
+                "nozzle_diameter_mm": result.pop("nozzle_diameter_mm"),
+                "extruder_count": result.pop("extruder_count"),
             },
             **result,
         }
@@ -202,27 +206,6 @@ def load_filament_metadata(filament_json_path: Path) -> Dict:
     }
 
 
-def load_named_filament_metadata(profile_name: str) -> Dict:
-    profiles_root = Path("/workspace/profiles")
-
-    wanted = profile_name.strip().lower()
-
-    for path in profiles_root.rglob("*.json"):
-        if path.stem.strip().lower() == wanted:
-            return load_filament_metadata(path)
-
-        try:
-            import json
-            with open(path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            if str(data.get("name", "")).strip().lower() == wanted:
-                return load_filament_metadata(path)
-        except Exception:
-            pass
-
-    raise FileNotFoundError(f"Support pricing filament profile not found: {profile_name}")
-
-
 def run_orca_with_profiles(
     stl_path: str,
     material_profile: str,
@@ -237,8 +220,10 @@ def run_orca_with_profiles(
     support_price_eur_per_kg: float,
     material_display_name: str,
     support_material_display_name: str,
+    nozzle_diameter_mm: str | None = None,
 ) -> Dict:
-    selected = select_profile_set(material_profile, support_material_type)
+    selected = select_profile_set(material_profile, support_material_type, nozzle_diameter_mm)
+    dual = bool(selected["support_filament"])
 
     tmpdir = tempfile.mkdtemp(prefix="orca-run-")
     tmpdir_path = Path(tmpdir)
@@ -260,6 +245,9 @@ def run_orca_with_profiles(
             top_layers=top_layers,
             bottom_layers=bottom_layers,
             out_base=tmpdir_path,
+            dual_model_profile=selected["dual_model_profile"],
+            support_filament_name=selected["support_filament"],
+            nozzle_diameter_mm=selected["nozzle_diameter_mm"],
         )
 
         printer_path = resolved_dir / "printer.json"
@@ -277,10 +265,8 @@ def run_orca_with_profiles(
         if material_display_name:
             filament_metadata["filament_type"] = material_display_name
 
-        support_price_filament = selected.get("support_price_filament")
-        support_filament_metadata = (
-            load_named_filament_metadata(support_price_filament) if support_price_filament else dict(filament_metadata)
-        )
+        support_path = resolved_dir / "support.json"
+        support_filament_metadata = load_filament_metadata(support_path) if dual else dict(filament_metadata)
 
         if support_density_g_cm3 and support_density_g_cm3 > 0:
             support_filament_metadata["filament_density_g_cm3"] = support_density_g_cm3
@@ -298,7 +284,7 @@ def run_orca_with_profiles(
         cmd = [
             ORCA_PATH,
             "--load-settings", f"{printer_path};{process_path}",
-            "--load-filaments", str(filament_path),
+            "--load-filaments", f"{filament_path};{support_path}" if dual else str(filament_path),
             "--outputdir", str(output_dir),
             "--slice", "0",
             str(slice_input),
@@ -325,9 +311,10 @@ def run_orca_with_profiles(
             str(gcode_path),
             filament_metadata=filament_metadata,
             support_filament_metadata=support_filament_metadata,
+            dual_extruder=dual,
         )
 
-        result["orientation"] = orientation
+        result.update(orientation=orientation, nozzle_diameter_mm=selected["nozzle_diameter_mm"], extruder_count=2 if dual else 1)
         return result
 
     finally:
@@ -355,9 +342,13 @@ def parse_gcode(
     gcode_path: str,
     filament_metadata: Dict | None = None,
     support_filament_metadata: Dict | None = None,
+    *,
+    dual_extruder: bool = False,
 ) -> Dict:
     filament_metadata = filament_metadata or {}
     support_filament_metadata = support_filament_metadata or filament_metadata
+    if dual_extruder:
+        return _parse_dual_gcode(gcode_path, filament_metadata, support_filament_metadata)
 
     current_role = "unknown"
     relative_extrusion = True
@@ -510,6 +501,57 @@ def parse_gcode(
         support_cm3 = total_filament_cm3 * support_ratio
         model_cm3 = total_filament_cm3 * model_ratio
 
+    return _filament_result(
+        print_time_min, model_mm, support_mm, model_cm3, support_cm3,
+        (model_density_g_cm3, model_cost_per_kg, model_material_name),
+        (support_density_g_cm3, support_cost_per_kg, support_material_name),
+        support_tool=0,
+    )
+
+
+def _parse_dual_gcode(gcode_path, filament_metadata, support_metadata):
+    # Orca writes authoritative per-filament totals near the end of the file.
+    # Reading just the footer avoids scanning millions of individual moves.
+    with open(gcode_path, "rb") as gcode:
+        size = gcode.seek(0, os.SEEK_END)
+        gcode.seek(max(0, size - 1024 * 1024))
+        footer = gcode.read().decode("utf-8", errors="replace")
+    fields = dict(re.findall(r"^; ([^=\r\n]+?)\s*=\s*([^\r\n]+)", footer, re.MULTILINE))
+
+    def amounts(key):
+        raw = fields.get(key)
+        if raw is None:
+            return None
+        try:
+            values = [float(value) for value in raw.split(",")]
+        except ValueError:
+            raise OrcaSliceError(f"Invalid dual-extruder G-code total: {key}") from None
+        if len(values) != 2 or any(value < 0 or not math.isfinite(value) for value in values):
+            raise OrcaSliceError(f"Expected two per-filament G-code totals for {key}")
+        return values
+
+    lengths = amounts("filament used [mm]")
+    if lengths is None:
+        raise OrcaSliceError("Dual-extruder G-code is missing per-filament lengths")
+    volumes = amounts("filament used [cm3]")
+    if volumes is None:
+        diameters = [metadata.get("filament_diameter_mm") or FILAMENT_DIAMETER_MM_DEFAULT
+                     for metadata in (filament_metadata, support_metadata)]
+        volumes = [length * math.pi * (diameter / 2) ** 2 / 1000 for length, diameter in zip(lengths, diameters)]
+
+    def material(metadata):
+        return (metadata.get("filament_density_g_cm3"), metadata.get("filament_cost_eur_per_kg"),
+                metadata.get("filament_type") or metadata.get("filament_settings_id") or "unknown")
+
+    return _filament_result(
+        _parse_time_to_minutes(fields.get("estimated printing time (normal mode)", "")),
+        *lengths, *volumes, material(filament_metadata), material(support_metadata), support_tool=1,
+    )
+
+
+def _filament_result(print_time_min, model_mm, support_mm, model_cm3, support_cm3, model, support, support_tool):
+    model_density_g_cm3, model_cost_per_kg, model_material_name = model
+    support_density_g_cm3, support_cost_per_kg, support_material_name = support
     model_g = model_cm3 * model_density_g_cm3 if (model_cm3 and model_density_g_cm3) else 0.0
     support_g = support_cm3 * support_density_g_cm3 if (support_cm3 and support_density_g_cm3) else 0.0
 
@@ -534,7 +576,7 @@ def parse_gcode(
     if support_mm > 0:
         tools.append(
             {
-                "tool": 0,
+                "tool": support_tool,
                 "role": "support",
                 "material": support_material_name,
                 "filament_length_mm": round(support_mm, 2),
@@ -547,8 +589,8 @@ def parse_gcode(
     return {
         "print_time_minutes": int(print_time_min or 0),
         "print_time_hours": round((print_time_min or 0) / 60.0, 4),
-        "filament_length_mm_total": round(total_filament_mm, 3) if total_filament_mm is not None else 0,
-        "filament_volume_cm3_total": round(total_filament_cm3, 3) if total_filament_cm3 is not None else 0,
+        "filament_length_mm_total": round(model_mm + support_mm, 3),
+        "filament_volume_cm3_total": round(model_cm3 + support_cm3, 3),
         "filament_weight_g_total": round(total_weight_g, 3),
         "material_cost_eur_total": round(total_cost, 2),
         "model_filament_length_mm": round(model_mm, 3),

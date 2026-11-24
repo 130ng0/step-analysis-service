@@ -4,7 +4,7 @@ import logging
 import os
 import time
 import uuid
-from typing import Literal
+from typing import Literal, Optional
 
 import asyncio
 import requests
@@ -43,7 +43,7 @@ logger = logging.getLogger("step-analysis-service")
 
 app = FastAPI(
     title="3D Model Analysis Service",
-    version="2.14.2",
+    version="2.14.3",
     docs_url="/docs",
     redoc_url="/redoc",
 )
@@ -169,6 +169,7 @@ async def create_analysis_job(
     file: UploadFile = File(...),
     material_profile: Literal["abs", "abs_cf", "abs_esd", "asa", "pc", "pc_cf", "pc_fr", "tpu"] = Form(default="abs"),
     support_material_type: Literal["none", "breakaway", "hips", "soluble"] = Form(default="breakaway"),
+    nozzle_diameter_mm: Optional[Literal["0.4", "0.6"]] = Form(default=None),
     infill_percent: float = Form(default=20.0),
     perimeter_count: int = Form(default=5),
     top_layers: int = Form(default=5),
@@ -213,6 +214,7 @@ async def create_analysis_job(
     request_payload = {
         "material_profile": material_profile,
         "support_material_type": support_material_type,
+        "nozzle_diameter_mm": nozzle_diameter_mm,
         "infill_percent": infill_percent,
         "perimeter_count": perimeter_count,
         "top_layers": top_layers,
@@ -354,6 +356,7 @@ async def analyze_model(
         material_profile: Literal["abs", "abs_cf", "abs_esd", "asa", "pc", "pc_cf", "pc_fr", "tpu"] = Form(
             default="abs"),
         support_material_type: Literal["none", "breakaway", "hips", "soluble"] = Form(default="breakaway"),
+        nozzle_diameter_mm: Optional[Literal["0.4", "0.6"]] = Form(default=None),
         infill_percent: float = Form(default=20.0),
         perimeter_count: int = Form(default=5),
         top_layers: int = Form(default=5),
@@ -420,6 +423,9 @@ async def analyze_model(
             "material_display_name": material_display_name,
             "support_material_display_name": support_material_display_name,
         }
+
+        if nozzle_diameter_mm:
+            data["nozzle_diameter_mm"] = nozzle_diameter_mm
 
         response = requests.post(
             f"{ORCA_WORKER_URL}/slice",

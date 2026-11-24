@@ -34,6 +34,9 @@ def slice_with_worker(stl_bytes: bytes, stl_filename: str, payload: dict[str, An
         "support_material_display_name": str(payload.get("support_material_display_name", "")),
     }
 
+    if payload.get("nozzle_diameter_mm"):
+        data["nozzle_diameter_mm"] = str(payload["nozzle_diameter_mm"])
+
     try:
         response = requests.post(
             f"{ORCA_WORKER_URL}/slice",

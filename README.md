@@ -9,6 +9,14 @@
 
 See [Orca worker deployment](#orca-worker-deployment) for the Portainer update and rollback steps.
 
+## 2.14.3 / Orca Worker API 2.3.3 - Nozzle selection and dual extrusion
+
+Both slice API paths accept optional `nozzle_diameter_mm` (`0.4` or `0.6`). ABS, ABS-CF, ABS-ESD, ASA, PC and PC-CF have both sizes. PC-FR and TPU use 0.4 mm. Omitted sizes use the previous material defaults.
+
+Soluble support and HIPS use the supplied EL-140V3 Dualprint profile family, with separate model and support filaments. The model uses tool 0, while both support body and interface use tool 1. The worker strips custom G-code macros, printer connection settings and post-processing hooks from those profiles. The prime tower is disabled. Breakaway and `none` use a single extruder. `none` disables support generation.
+
+The parser uses Orca's per-filament G-code footer totals for Dualprint, applying the density and price supplied by Odoo. Legacy output fields remain available and `tools` reports the tool index and costs per filament. The result also records the chosen nozzle and configured extruder count. Rebuild both containers and update Odoo to 17.0.1.8.28 to enable website nozzle selection.
+
 ## 2.14.2 / Orca Worker API 2.3.2 - Fast orientation estimate
 
 With supports enabled, the worker reads binary STL bounds and samples up to 32,768 triangles. It estimates the support needed in the input orientation and after a 180-degree rotation around X. It flips only when the estimated support score drops by more than 30 percent and the rotated model has a measurable bed contact area. ASCII STL and geometry without a clear preference use the input orientation.

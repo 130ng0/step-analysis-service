@@ -128,10 +128,10 @@ def patch_process_for_printer(process: dict[str, Any], printer: dict[str, Any]) 
     return patched
 
 
-def patch_filament_for_printer(filament: dict[str, Any], printer: dict[str, Any]) -> dict[str, Any]:
+def patch_filament_for_printer(filament: dict[str, Any], printer: dict[str, Any], per_filament=False) -> dict[str, Any]:
     patched = dict(filament)
 
-    extruder_count = _infer_extruder_count(printer)
+    extruder_count = 1 if per_filament else _infer_extruder_count(printer)
     printer_name = printer.get("name")
     printer_model = printer.get("printer_model")
     nozzle = printer.get("nozzle_diameter")
@@ -230,6 +230,9 @@ def resolve_profile_set(
     user_base: pathlib.Path = USER_BASE,
     resources_base: pathlib.Path = ORCA_RESOURCES,
     out_base: pathlib.Path = OUT_BASE,
+    dual_model_profile: str | None = None,
+    support_filament_name: str | None = None,
+    nozzle_diameter_mm: str | None = None,
 ) -> pathlib.Path:
     candidates = find_candidate_files(
         [
@@ -246,6 +249,22 @@ def resolve_profile_set(
         machine = resolve_profile(machine_name, candidates)
         process = resolve_profile(process_name, candidates)
         filament = resolve_profile(filament_name, candidates)
+        if support_filament_name:
+            machine.update(resolve_profile("EL-140V3_Dual", candidates))
+            machine["nozzle_diameter"] = [nozzle_diameter_mm, nozzle_diameter_mm]
+            process.update(resolve_profile(f"Dualprint_{nozzle_diameter_mm}mm", candidates))
+            if dual_model_profile:
+                filament.update(resolve_profile(dual_model_profile, candidates))
+            support = resolve_profile(support_filament_name, candidates)
+            support["filament_is_support"] = ["1"]
+            support["filament_soluble"] = ["1" if support_material_type == "soluble" else "0"]
+            support.setdefault("filament_density", ["1.25" if support_material_type == "soluble" else "1.05"])
+            for config in (machine, process, filament, support):
+                for key in list(config):
+                    if key.endswith("_gcode") or key.startswith(("print_host", "printhost")) or key in {
+                        "bed_custom_model", "bed_custom_texture", "post_process",
+                    }:
+                        del config[key]
     except Exception as exc:
         raise ResolveProfilesError(str(exc)) from exc
 
@@ -257,7 +276,12 @@ def resolve_profile_set(
     process = patch_process_for_support_mode(process, support_material_type)
     process = patch_process_for_orientation(process)
 
-    filament = patch_filament_for_printer(filament, machine)
+    if support_filament_name:
+        process["support_filament"] = "2"
+        process["support_interface_filament"] = "2"
+        process["enable_prime_tower"] = "0"
+        support = patch_filament_for_printer(cleanup_profile(support, "filament", support_filament_name), machine, per_filament=True)
+    filament = patch_filament_for_printer(filament, machine, per_filament=bool(support_filament_name))
 
     process = apply_process_overrides(
         process,
@@ -271,6 +295,8 @@ def resolve_profile_set(
     write_json(out_dir / "printer.json", machine)
     write_json(out_dir / "process.json", process)
     write_json(out_dir / "filament.json", filament)
+    if support_filament_name:
+        write_json(out_dir / "support.json", support)
     return out_dir
 
 
