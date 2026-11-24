@@ -9,6 +9,10 @@
 
 See [Orca worker deployment](#orca-worker-deployment) for the Portainer update and rollback steps.
 
+## 2.14.4 / Orca Worker API 2.3.4 - Shell settings from the process profile
+
+If a client omits `perimeter_count`, `top_layers` or `bottom_layers`, Orca uses the corresponding setting from the resolved process profile. Explicit overrides, including zero layers, are accepted by both analysis endpoints. Job results report the effective values in `applied_slicer_settings`. Rebuild both service containers before updating Odoo to 17.0.1.8.30.
+
 ## 2.14.3 / Orca Worker API 2.3.3 - Nozzle selection and dual extrusion
 
 Both slice API paths accept optional `nozzle_diameter_mm` (`0.4` or `0.6`). ABS, ABS-CF, ABS-ESD, ASA, PC and PC-CF have both sizes. PC-FR and TPU use 0.4 mm. Omitted sizes use the previous material defaults.

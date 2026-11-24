@@ -43,7 +43,7 @@ logger = logging.getLogger("step-analysis-service")
 
 app = FastAPI(
     title="3D Model Analysis Service",
-    version="2.14.3",
+    version="2.14.4",
     docs_url="/docs",
     redoc_url="/redoc",
 )
@@ -171,9 +171,9 @@ async def create_analysis_job(
     support_material_type: Literal["none", "breakaway", "hips", "soluble"] = Form(default="breakaway"),
     nozzle_diameter_mm: Optional[Literal["0.4", "0.6"]] = Form(default=None),
     infill_percent: float = Form(default=20.0),
-    perimeter_count: int = Form(default=5),
-    top_layers: int = Form(default=5),
-    bottom_layers: int = Form(default=5),
+    perimeter_count: Optional[int] = Form(default=None),
+    top_layers: Optional[int] = Form(default=None),
+    bottom_layers: Optional[int] = Form(default=None),
     machine_hour_rate_eur: float = Form(default=8.0),
     margin_factor: float = Form(default=1.0),
     material_density_g_cm3: float = Form(default=0.0),
@@ -358,9 +358,9 @@ async def analyze_model(
         support_material_type: Literal["none", "breakaway", "hips", "soluble"] = Form(default="breakaway"),
         nozzle_diameter_mm: Optional[Literal["0.4", "0.6"]] = Form(default=None),
         infill_percent: float = Form(default=20.0),
-        perimeter_count: int = Form(default=5),
-        top_layers: int = Form(default=5),
-        bottom_layers: int = Form(default=5),
+        perimeter_count: Optional[int] = Form(default=None),
+        top_layers: Optional[int] = Form(default=None),
+        bottom_layers: Optional[int] = Form(default=None),
         machine_hour_rate_eur: float = Form(default=8.0),
         margin_factor: float = Form(default=1.0),
         material_density_g_cm3: float = Form(default=0.0),
@@ -412,9 +412,6 @@ async def analyze_model(
             "material_profile": material_profile,
             "support_material_type": worker_support_mode,
             "infill_percent": str(infill_percent),
-            "perimeter_count": str(perimeter_count),
-            "top_layers": str(top_layers),
-            "bottom_layers": str(bottom_layers),
 
             "material_density_g_cm3": str(material_density_g_cm3),
             "material_price_eur_per_kg": str(material_price_eur_per_kg),
@@ -424,8 +421,14 @@ async def analyze_model(
             "support_material_display_name": support_material_display_name,
         }
 
-        if nozzle_diameter_mm:
-            data["nozzle_diameter_mm"] = nozzle_diameter_mm
+        for key, value in {
+            "nozzle_diameter_mm": nozzle_diameter_mm,
+            "perimeter_count": perimeter_count,
+            "top_layers": top_layers,
+            "bottom_layers": bottom_layers,
+        }.items():
+            if value is not None:
+                data[key] = str(value)
 
         response = requests.post(
             f"{ORCA_WORKER_URL}/slice",

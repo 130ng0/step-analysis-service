@@ -23,9 +23,6 @@ def slice_with_worker(stl_bytes: bytes, stl_filename: str, payload: dict[str, An
         "material_profile": str(payload.get("material_profile", "abs")),
         "support_material_type": str(payload.get("support_material_type", "none")),
         "infill_percent": str(payload.get("infill_percent", 20.0)),
-        "perimeter_count": str(payload.get("perimeter_count", 5)),
-        "top_layers": str(payload.get("top_layers", 5)),
-        "bottom_layers": str(payload.get("bottom_layers", 5)),
         "material_density_g_cm3": str(payload.get("material_density_g_cm3", 0.0)),
         "material_price_eur_per_kg": str(payload.get("material_price_eur_per_kg", 0.0)),
         "support_density_g_cm3": str(payload.get("support_density_g_cm3", 0.0)),
@@ -34,8 +31,9 @@ def slice_with_worker(stl_bytes: bytes, stl_filename: str, payload: dict[str, An
         "support_material_display_name": str(payload.get("support_material_display_name", "")),
     }
 
-    if payload.get("nozzle_diameter_mm"):
-        data["nozzle_diameter_mm"] = str(payload["nozzle_diameter_mm"])
+    for key in ("nozzle_diameter_mm", "perimeter_count", "top_layers", "bottom_layers"):
+        if payload.get(key) is not None:
+            data[key] = str(payload[key])
 
     try:
         response = requests.post(

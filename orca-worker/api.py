@@ -15,9 +15,9 @@ from fastapi.responses import JSONResponse
 
 from orientation import prepare_orientation
 from profile_loader import ProfileLoaderError, select_profile_set
-from resolve_profiles import ResolveProfilesError, resolve_profile_set
+from resolve_profiles import ResolveProfilesError, load_json, resolve_profile_set
 
-app = FastAPI(title="Orca Worker API", version="2.3.3")
+app = FastAPI(title="Orca Worker API", version="2.3.4")
 
 ORCA_PATH = "/opt/orca/squashfs-root/AppRun"
 FILAMENT_DIAMETER_MM_DEFAULT = 1.75
@@ -41,9 +41,9 @@ async def slice_model(
     material_profile: Literal["abs", "abs_cf", "abs_esd", "asa", "pc", "pc_cf", "pc_fr", "tpu"] = Form(default="abs"),
     support_material_type: Literal["none", "breakaway", "hips", "soluble"] = Form(default="none"),
     infill_percent: float = Form(default=20.0),
-    perimeter_count: int = Form(default=5),
-    top_layers: int = Form(default=5),
-    bottom_layers: int = Form(default=5),
+    perimeter_count: Optional[int] = Form(default=None),
+    top_layers: Optional[int] = Form(default=None),
+    bottom_layers: Optional[int] = Form(default=None),
     material_density_g_cm3: float = Form(default=0.0),
     material_price_eur_per_kg: float = Form(default=0.0),
     support_density_g_cm3: float = Form(default=0.0),
@@ -97,9 +97,7 @@ async def slice_model(
             "support_material_type": support_material_type,
             "applied_slicer_settings": {
                 "infill_percent": infill_percent,
-                "perimeter_count": perimeter_count,
-                "top_layers": top_layers,
-                "bottom_layers": bottom_layers,
+                **result.pop("shell_settings"),
                 "orientation": result.pop("orientation"),
                 "nozzle_diameter_mm": result.pop("nozzle_diameter_mm"),
                 "extruder_count": result.pop("extruder_count"),
@@ -211,9 +209,9 @@ def run_orca_with_profiles(
     material_profile: str,
     support_material_type: str,
     infill_percent: float,
-    perimeter_count: int,
-    top_layers: int,
-    bottom_layers: int,
+    perimeter_count: int | None,
+    top_layers: int | None,
+    bottom_layers: int | None,
     material_density_g_cm3: float,
     material_price_eur_per_kg: float,
     support_density_g_cm3: float,
@@ -314,6 +312,12 @@ def run_orca_with_profiles(
             dual_extruder=dual,
         )
 
+        process = load_json(process_path)
+        result["shell_settings"] = {
+            "perimeter_count": int(process["wall_loops"]),
+            "top_layers": int(process["top_shell_layers"]),
+            "bottom_layers": int(process["bottom_shell_layers"]),
+        }
         result.update(orientation=orientation, nozzle_diameter_mm=selected["nozzle_diameter_mm"], extruder_count=2 if dual else 1)
         return result
 
