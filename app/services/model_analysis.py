@@ -66,8 +66,8 @@ def _crop_png_whitespace(png_bytes: bytes, padding: int = 20) -> bytes:
         return png_bytes
 
 
-def _renderer_command(stl_path: str, png_path: str) -> list[str]:
-    base = [sys.executable, "-m", "app.services.preview_renderer_worker", stl_path, png_path]
+def _renderer_command(stl_path: str, png_path: str, orientation: str) -> list[str]:
+    base = [sys.executable, "-m", "app.services.preview_renderer_worker", stl_path, png_path, orientation]
     xvfb_run = shutil.which("xvfb-run")
     if xvfb_run:
         return [xvfb_run, "-a", "-s", "-screen 0 1024x768x24", *base]
@@ -76,7 +76,7 @@ def _renderer_command(stl_path: str, png_path: str) -> list[str]:
     return base
 
 
-def _render_stl_preview_png_base64_isolated(stl_bytes: bytes) -> str | None:
+def _render_stl_preview_png_base64_isolated(stl_bytes: bytes, orientation: str) -> str | None:
     if not stl_bytes:
         return None
 
@@ -86,7 +86,7 @@ def _render_stl_preview_png_base64_isolated(stl_bytes: bytes) -> str | None:
         with open(stl_path, "wb") as handle:
             handle.write(stl_bytes)
 
-        command = _renderer_command(stl_path, png_path)
+        command = _renderer_command(stl_path, png_path, orientation)
         try:
             completed = subprocess.run(
                 command,
@@ -124,7 +124,7 @@ def _render_stl_preview_png_base64_isolated(stl_bytes: bytes) -> str | None:
         return base64.b64encode(png_bytes).decode("ascii")
 
 
-def render_stl_preview_png_base64(stl_bytes: bytes) -> str | None:
+def render_stl_preview_png_base64(stl_bytes: bytes, orientation: str = "original") -> str | None:
     """Render one preview in an isolated process.
 
     VTK/OpenGL is native code and may abort/segfault in a headless environment.
@@ -133,8 +133,8 @@ def render_stl_preview_png_base64(stl_bytes: bytes) -> str | None:
     serialized to keep memory usage predictable while slicing stays parallel.
     """
     with _PREVIEW_RENDER_LOCK:
-        return _render_stl_preview_png_base64_isolated(stl_bytes)
+        return _render_stl_preview_png_base64_isolated(stl_bytes, orientation)
 
 
-def render_preview_from_converted_stl_bytes(stl_bytes: bytes) -> str | None:
-    return render_stl_preview_png_base64(stl_bytes)
+def render_preview_from_converted_stl_bytes(stl_bytes: bytes, orientation: str = "original") -> str | None:
+    return render_stl_preview_png_base64(stl_bytes, orientation)

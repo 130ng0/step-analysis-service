@@ -61,6 +61,18 @@ def process_job_sync(job: dict) -> None:
             eta_seconds=remaining_guess,
         )
 
+        slicer_settings = worker_payload.get("applied_slicer_settings") or {
+            "infill_percent": request_payload.get("infill_percent"),
+            "perimeter_count": request_payload.get("perimeter_count"),
+            "top_layers": request_payload.get("top_layers"),
+            "bottom_layers": request_payload.get("bottom_layers"),
+        }
+        orientation = slicer_settings.get("orientation")
+        if orientation == "flipped_x_180":
+            preview_png_base64 = render_preview_from_converted_stl_bytes(stl_bytes, orientation)
+        if preview_png_base64 and orientation in ("original", "flipped_x_180"):
+            slicer_settings["preview_orientation"] = orientation
+
         print_time_hours = float(worker_payload.get("print_time_hours") or 0.0)
         machine_hour_rate_eur = float(request_payload.get("machine_hour_rate_eur") or 8.0)
         margin_factor = float(request_payload.get("margin_factor") or 1.0)
@@ -96,12 +108,7 @@ def process_job_sync(job: dict) -> None:
             "support_filament_weight_g": round(float(worker_payload.get("support_filament_weight_g", 0) or 0), 3),
             "model_material_cost_eur": round(float(worker_payload.get("model_material_cost_eur", 0) or 0), 2),
             "support_material_cost_eur": round(float(worker_payload.get("support_material_cost_eur", 0) or 0), 2),
-            "applied_slicer_settings": worker_payload.get("applied_slicer_settings") or {
-                "infill_percent": request_payload.get("infill_percent"),
-                "perimeter_count": request_payload.get("perimeter_count"),
-                "top_layers": request_payload.get("top_layers"),
-                "bottom_layers": request_payload.get("bottom_layers"),
-            },
+            "applied_slicer_settings": slicer_settings,
             "tools": worker_payload.get("tools", []),
             "preview_png_base64": preview_png_base64,
         }

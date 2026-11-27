@@ -9,6 +9,10 @@
 
 See [Orca worker deployment](#orca-worker-deployment) for the Portainer update and rollback steps.
 
+## 2.14.6 - Preview in the slicing orientation
+
+The final static image uses the orientation reported by Orca. If an asynchronous job is flipped, its initial image is replaced after slicing by a new render of the rotated geometry. The analysis result records `applied_slicer_settings.preview_orientation` when a matching image was rendered. The preview depicts the part geometry, without toolpaths or supports.
+
 ## 2.14.5 / Orca Worker API 2.3.5 - Orientation selection
 
 Both analysis endpoints and the Orca worker accept an optional multipart field `orientation_mode`. The default `automatic` retains the existing support estimate and orientation selection. `original` keeps the source rotation through slicing by skipping the support-based flip and passing `--orient 0 --arrange 1`. Orca may reposition the part on the plate without rotating it. The worker confirms the requested mode in `applied_slicer_settings.orientation_mode`; the service rejects an original-orientation result without that confirmation. Rebuild both containers before updating Odoo to 17.0.1.11.9.

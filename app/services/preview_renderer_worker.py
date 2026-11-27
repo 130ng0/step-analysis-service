@@ -4,7 +4,7 @@ import os
 import sys
 
 
-def render_stl_to_png(stl_path: str, output_path: str) -> None:
+def render_stl_to_png(stl_path: str, output_path: str, orientation: str = "original") -> None:
     import vtk
 
     reader = vtk.vtkSTLReader()
@@ -15,7 +15,15 @@ def render_stl_to_png(stl_path: str, output_path: str) -> None:
         raise RuntimeError("STL contains no renderable cells")
 
     clean = vtk.vtkCleanPolyData()
-    clean.SetInputData(polydata)
+    if orientation == "flipped_x_180":
+        transform = vtk.vtkTransform()
+        transform.RotateX(180)
+        rotated = vtk.vtkTransformPolyDataFilter()
+        rotated.SetTransform(transform)
+        rotated.SetInputData(polydata)
+        clean.SetInputConnection(rotated.GetOutputPort())
+    else:
+        clean.SetInputData(polydata)
     clean.PointMergingOn()
     clean.Update()
 
@@ -153,11 +161,11 @@ def render_stl_to_png(stl_path: str, output_path: str) -> None:
 
 
 def main() -> int:
-    if len(sys.argv) != 3:
-        print("usage: python -m app.services.preview_renderer_worker INPUT.stl OUTPUT.png", file=sys.stderr)
+    if len(sys.argv) not in (3, 4):
+        print("usage: python -m app.services.preview_renderer_worker INPUT.stl OUTPUT.png [ORIENTATION]", file=sys.stderr)
         return 2
     try:
-        render_stl_to_png(sys.argv[1], sys.argv[2])
+        render_stl_to_png(*sys.argv[1:])
         return 0
     except Exception as exc:
         print(f"preview renderer failed: {exc}", file=sys.stderr)

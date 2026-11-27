@@ -43,7 +43,7 @@ logger = logging.getLogger("step-analysis-service")
 
 app = FastAPI(
     title="3D Model Analysis Service",
-    version="2.14.5",
+    version="2.14.6",
     docs_url="/docs",
     redoc_url="/redoc",
 )
@@ -404,8 +404,6 @@ async def analyze_model(
 
     try:
         stl_bytes, stl_filename = convert_upload_to_stl_bytes(file_bytes, filename)
-        preview_png_base64 = render_preview_from_converted_stl_bytes(stl_bytes)
-
         worker_support_mode = support_material_type
 
         files = {
@@ -473,6 +471,12 @@ async def analyze_model(
                 },
             )
 
+        slicer_settings = payload.get("applied_slicer_settings") or {}
+        orientation = slicer_settings.get("orientation") or "original"
+        preview_png_base64 = render_preview_from_converted_stl_bytes(stl_bytes, orientation)
+        if preview_png_base64 and slicer_settings.get("orientation") in ("original", "flipped_x_180"):
+            slicer_settings["preview_orientation"] = orientation
+
         print_time_hours = float(payload.get("print_time_hours") or 0.0)
         material_cost_eur_total = float(payload.get("material_cost_eur_total") or 0.0)
         filament_weight_g_total = float(payload.get("filament_weight_g_total") or 0.0)
@@ -511,7 +515,7 @@ async def analyze_model(
             "model_material_cost_eur": round(float(payload.get("model_material_cost_eur", 0) or 0), 2),
             "support_material_cost_eur": round(float(payload.get("support_material_cost_eur", 0) or 0), 2),
 
-            "applied_slicer_settings": payload.get("applied_slicer_settings", {}),
+            "applied_slicer_settings": slicer_settings,
             "tools": payload.get("tools", []),
             "preview_png_base64": preview_png_base64,
         }
