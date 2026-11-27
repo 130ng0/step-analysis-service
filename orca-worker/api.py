@@ -17,7 +17,7 @@ from orientation import prepare_orientation
 from profile_loader import ProfileLoaderError, select_profile_set
 from resolve_profiles import ResolveProfilesError, load_json, resolve_profile_set
 
-app = FastAPI(title="Orca Worker API", version="2.3.4")
+app = FastAPI(title="Orca Worker API", version="2.3.5")
 
 ORCA_PATH = "/opt/orca/squashfs-root/AppRun"
 FILAMENT_DIAMETER_MM_DEFAULT = 1.75
@@ -40,6 +40,7 @@ async def slice_model(
     file: UploadFile = File(...),
     material_profile: Literal["abs", "abs_cf", "abs_esd", "asa", "pc", "pc_cf", "pc_fr", "tpu"] = Form(default="abs"),
     support_material_type: Literal["none", "breakaway", "hips", "soluble"] = Form(default="none"),
+    orientation_mode: Literal["automatic", "original"] = Form(default="automatic"),
     infill_percent: float = Form(default=20.0),
     perimeter_count: Optional[int] = Form(default=None),
     top_layers: Optional[int] = Form(default=None),
@@ -76,6 +77,7 @@ async def slice_model(
             stl_path=tmp_input,
             material_profile=material_profile,
             support_material_type=support_material_type,
+            orientation_mode=orientation_mode,
             infill_percent=infill_percent,
             perimeter_count=perimeter_count,
             top_layers=top_layers,
@@ -99,6 +101,7 @@ async def slice_model(
                 "infill_percent": infill_percent,
                 **result.pop("shell_settings"),
                 "orientation": result.pop("orientation"),
+                "orientation_mode": orientation_mode,
                 "nozzle_diameter_mm": result.pop("nozzle_diameter_mm"),
                 "extruder_count": result.pop("extruder_count"),
             },
@@ -219,6 +222,7 @@ def run_orca_with_profiles(
     material_display_name: str,
     support_material_display_name: str,
     nozzle_diameter_mm: str | None = None,
+    orientation_mode: str = "automatic",
 ) -> Dict:
     selected = select_profile_set(material_profile, support_material_type, nozzle_diameter_mm)
     dual = bool(selected["support_filament"])
@@ -238,6 +242,7 @@ def run_orca_with_profiles(
             filament_name=selected["filament"],
             output_name="profiles",
             support_material_type=support_material_type,
+            orientation_mode=orientation_mode,
             infill_percent=infill_percent,
             perimeter_count=perimeter_count,
             top_layers=top_layers,
@@ -276,7 +281,7 @@ def run_orca_with_profiles(
             support_filament_metadata["filament_type"] = support_material_display_name
 
         slice_input, orientation = Path(stl_path), "original"
-        if support_material_type != "none":
+        if orientation_mode == "automatic" and support_material_type != "none":
             slice_input, orientation = prepare_orientation(slice_input, tmpdir_path / "flipped.stl")
 
         cmd = [
@@ -284,6 +289,7 @@ def run_orca_with_profiles(
             "--load-settings", f"{printer_path};{process_path}",
             "--load-filaments", f"{filament_path};{support_path}" if dual else str(filament_path),
             "--outputdir", str(output_dir),
+            *(["--orient", "0", "--arrange", "1"] if orientation_mode == "original" else []),
             "--slice", "0",
             str(slice_input),
         ]

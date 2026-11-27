@@ -180,15 +180,16 @@ def patch_process_for_support_mode(process: dict[str, Any], support_material_typ
     return patched
 
 
-def patch_process_for_orientation(process: dict[str, Any]) -> dict[str, Any]:
+def patch_process_for_orientation(process: dict[str, Any], orientation_mode: str = "automatic") -> dict[str, Any]:
     patched = dict(process)
 
     # Orca/Prusa-style process flags. These are harmless if already present.
-    patched["auto_orient"] = "1"
+    auto_orientation = "0" if orientation_mode == "original" else "1"
+    patched["auto_orient"] = auto_orientation
     patched["ensure_vertical_shell_thickness"] = "1"
 
     # Some profiles/builds may ignore this, but it is safe to set.
-    patched["rotate_to_minimize_support"] = "1"
+    patched["rotate_to_minimize_support"] = auto_orientation
 
     # Keep arrangement predictable for pricing runs.
     patched.setdefault("print_sequence", "by layer")
@@ -233,6 +234,7 @@ def resolve_profile_set(
     dual_model_profile: str | None = None,
     support_filament_name: str | None = None,
     nozzle_diameter_mm: str | None = None,
+    orientation_mode: str = "automatic",
 ) -> pathlib.Path:
     candidates = find_candidate_files(
         [
@@ -274,7 +276,7 @@ def resolve_profile_set(
 
     process = patch_process_for_printer(process, machine)
     process = patch_process_for_support_mode(process, support_material_type)
-    process = patch_process_for_orientation(process)
+    process = patch_process_for_orientation(process, orientation_mode)
 
     if support_filament_name:
         process["support_filament"] = "2"

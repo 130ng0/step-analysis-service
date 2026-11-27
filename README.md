@@ -9,6 +9,10 @@
 
 See [Orca worker deployment](#orca-worker-deployment) for the Portainer update and rollback steps.
 
+## 2.14.5 / Orca Worker API 2.3.5 - Orientation selection
+
+Both analysis endpoints and the Orca worker accept an optional multipart field `orientation_mode`. The default `automatic` retains the existing support estimate and orientation selection. `original` keeps the source rotation through slicing by skipping the support-based flip and passing `--orient 0 --arrange 1`. Orca may reposition the part on the plate without rotating it. The worker confirms the requested mode in `applied_slicer_settings.orientation_mode`; the service rejects an original-orientation result without that confirmation. Rebuild both containers before updating Odoo to 17.0.1.11.9.
+
 ## 2.14.4 / Orca Worker API 2.3.4 - Shell settings from the process profile
 
 If a client omits `perimeter_count`, `top_layers` or `bottom_layers`, Orca uses the corresponding setting from the resolved process profile. Explicit overrides, including zero layers, are accepted by both analysis endpoints. Job results report the effective values in `applied_slicer_settings`. Rebuild both service containers before updating Odoo to 17.0.1.8.30.

@@ -43,7 +43,7 @@ logger = logging.getLogger("step-analysis-service")
 
 app = FastAPI(
     title="3D Model Analysis Service",
-    version="2.14.4",
+    version="2.14.5",
     docs_url="/docs",
     redoc_url="/redoc",
 )
@@ -169,6 +169,7 @@ async def create_analysis_job(
     file: UploadFile = File(...),
     material_profile: Literal["abs", "abs_cf", "abs_esd", "asa", "pc", "pc_cf", "pc_fr", "tpu"] = Form(default="abs"),
     support_material_type: Literal["none", "breakaway", "hips", "soluble"] = Form(default="breakaway"),
+    orientation_mode: Literal["automatic", "original"] = Form(default="automatic"),
     nozzle_diameter_mm: Optional[Literal["0.4", "0.6"]] = Form(default=None),
     infill_percent: float = Form(default=20.0),
     perimeter_count: Optional[int] = Form(default=None),
@@ -214,6 +215,7 @@ async def create_analysis_job(
     request_payload = {
         "material_profile": material_profile,
         "support_material_type": support_material_type,
+        "orientation_mode": orientation_mode,
         "nozzle_diameter_mm": nozzle_diameter_mm,
         "infill_percent": infill_percent,
         "perimeter_count": perimeter_count,
@@ -356,6 +358,7 @@ async def analyze_model(
         material_profile: Literal["abs", "abs_cf", "abs_esd", "asa", "pc", "pc_cf", "pc_fr", "tpu"] = Form(
             default="abs"),
         support_material_type: Literal["none", "breakaway", "hips", "soluble"] = Form(default="breakaway"),
+        orientation_mode: Literal["automatic", "original"] = Form(default="automatic"),
         nozzle_diameter_mm: Optional[Literal["0.4", "0.6"]] = Form(default=None),
         infill_percent: float = Form(default=20.0),
         perimeter_count: Optional[int] = Form(default=None),
@@ -411,6 +414,7 @@ async def analyze_model(
         data = {
             "material_profile": material_profile,
             "support_material_type": worker_support_mode,
+            "orientation_mode": orientation_mode,
             "infill_percent": str(infill_percent),
 
             "material_density_g_cm3": str(material_density_g_cm3),
@@ -454,6 +458,17 @@ async def analyze_model(
                     "success": False,
                     "error": "SLICE_FAILED",
                     "details": payload.get("details") or payload.get("error") or "Unknown Orca worker error",
+                    "filename": filename,
+                },
+            )
+
+        if orientation_mode == "original" and (payload.get("applied_slicer_settings") or {}).get("orientation_mode") != "original":
+            return JSONResponse(
+                status_code=502,
+                content={
+                    "success": False,
+                    "error": "ORIENTATION_NOT_CONFIRMED",
+                    "details": "Orca worker did not confirm original orientation",
                     "filename": filename,
                 },
             )

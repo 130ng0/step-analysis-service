@@ -19,7 +19,9 @@ def slice_with_worker(stl_bytes: bytes, stl_filename: str, payload: dict[str, An
         "file": (stl_filename, stl_bytes, "application/octet-stream"),
     }
 
+    orientation_mode = payload.get("orientation_mode", "automatic")
     data = {
+        "orientation_mode": orientation_mode,
         "material_profile": str(payload.get("material_profile", "abs")),
         "support_material_type": str(payload.get("support_material_type", "none")),
         "infill_percent": str(payload.get("infill_percent", 20.0)),
@@ -54,4 +56,6 @@ def slice_with_worker(stl_bytes: bytes, stl_filename: str, payload: dict[str, An
         details = payload.get("details") or payload.get("error") or response.text
         raise OrcaClientError(f"orca worker failed: {details}")
 
+    if orientation_mode == "original" and (payload.get("applied_slicer_settings") or {}).get("orientation_mode") != "original":
+        raise OrcaClientError("orca worker did not confirm original orientation")
     return payload
